@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -march=native -Wall -Wextra -std=c++14 -O3 -DNDEBUG CMakeFiles/my_glin_test.dir/indexBuildAndFindByMe.cpp.o CMakeFiles/my_glin_test.dir/glin/hilbert/hilbert.cpp.o -o my_glin_test  -Wl,-rpath,/usr/local/lib:/usr/local/boost-1.67/lib /usr/local/lib/libgeos.so /usr/local/boost-1.67/lib/libboost_system.so 

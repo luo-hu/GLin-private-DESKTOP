@@ -1,0 +1,77 @@
+cmake_minimum_required(VERSION 3.12)
+project(glin)
+set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake) # find geos path
+
+# 强制指定GEOS路径
+set(GEOS_INCLUDE_DIR /usr/include CACHE PATH "GEOS include directory")
+set(GEOS_LIBRARY /usr/lib/x86_64-linux-gnu/libgeos-3.8.0.so CACHE FILEPATH "GEOS library")
+
+if(APPLE) # This has to be manually setup
+#    set(Boost_INCLUDE_DIR /usr/local/Cellar/boost/1.75.0/include)
+    set(CMAKE_FIND_FRAMEWORK LAST)
+    set(CMAKE_FIND_APPBUNDLE LAST)
+endif()
+set(Boost_USE_MULTITHREADED ON)
+# FindGEOS.cmake is copied from https://github.com/valhalla/valhalla/blob/master/cmake/FindGEOS.cmake
+find_package(GEOS REQUIRED)# if not find geo, cannot compile find geos.cmake
+find_package(Boost REQUIRED)
+set(CMAKE_CXX_STANDARD 14)
+
+
+# SIMD
+if(MSVC)
+    set(CMAKE_CXX_FLAGS "/O2 /arch:AVX2 /W1 /EHsc")
+elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
+    set(CMAKE_CXX_FLAGS "-O3 -xHost")
+else()
+    # clang and gcc
+    set(CMAKE_CXX_FLAGS "-O3 -march=native -Wall -Wextra")
+endif()
+
+
+# # 添加GEOS头文件目录到全局包含路径
+include_directories(${GEOS_INCLUDE_DIR})
+
+add_executable(test_glin test/unittest_main.cpp glin/hilbert/hilbert.h glin/hilbert/hilbert.cpp)
+target_link_libraries(test_glin PRIVATE ${GEOS_LIBRARY} ${Boost_SYSTEM_LIBRARY})
+target_include_directories(test_glin PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core;${Boost_INCLUDE_DIRS}>")
+
+add_executable(test_glin_piece test/unittest_main.cpp glin/hilbert/hilbert.h glin/hilbert/hilbert.cpp)
+#target_compile_definitions(test_glin_piece PRIVATE PIECE) 这一行代码要去掉，否则test_glin_piece 在make时会出错
+target_link_libraries(test_glin_piece PRIVATE ${GEOS_LIBRARY} ${Boost_SYSTEM_LIBRARY})
+target_include_directories(test_glin_piece PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core;${Boost_INCLUDE_DIRS}>")
+
+
+# 添加GEOS和Boost库的查找命令
+# find_package(GEOS REQUIRED)
+# find_package(Boost REQUIRED COMPONENTS system)
+
+# # 添加GEOS头文件目录到全局包含路径
+# include_directories(${GEOS_INCLUDE_DIR})
+
+# add_executable(test_glin test/unittest_main.cpp glin/hilbert/hilbert.cpp)
+# target_link_libraries(test_glin PRIVATE ${GEOS_LIBRARIES} ${Boost_SYSTEM_LIBRARY})
+# target_include_directories(test_glin PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core;${Boost_INCLUDE_DIRS}>")
+
+# add_executable(test_glin_piece test/unittest_main.cpp glin/hilbert/hilbert.cpp)
+# target_compile_definitions(test_glin_piece PRIVATE PIECE)
+# target_link_libraries(test_glin_piece PRIVATE ${GEOS_LIBRARIES} ${Boost_SYSTEM_LIBRARY})
+# target_include_directories(test_glin_piece PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core;${Boost_INCLUDE_DIRS}>")
+find_package(GEOS REQUIRED COMPONENTS c++)
+include_directories(${GEOS_INCLUDE_DIR})
+#add_executable(my_glin_test indexBuildAndFindByMe.cpp)
+add_executable(my_glin_test indexBuildAndFindByMe.cpp ./glin/hilbert/hilbert.h ./glin/hilbert/hilbert.cpp)
+#target_link_libraries(my_glin_test PRIVATE GEOS::geos_cxx) 
+
+target_link_libraries(my_glin_test PRIVATE 
+  ${GEOS_LIBRARIES}  # 或直接使用geos_c
+  ${Boost_SYSTEM_LIBRARY}
+)
+# target_link_libraries(my_glin_test PRIVATE geos_c ${Boost_SYSTEM_LIBRARY})
+target_include_directories(my_glin_test PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core;${Boost_INCLUDE_DIRS}>")
+
+
+
+
+enable_testing()
+add_test(test_glin test_glin_piece) #running test while compile
