@@ -182,9 +182,9 @@ int main(int argc, char* argv[]) {
                 << std::endl;
     }
 
-    // Check for workload end conditions
+    // 工作负载结束条件 Check for workload end conditions
     if (num_actual_inserts < num_inserts_per_batch) {
-      // End if we have inserted all keys in a workload with inserts
+      // 实际插入小于一个批次，则说明插入要结束了 End if we have inserted all keys in a workload with inserts
       break;
     }
     double workload_elapsed_time =
@@ -209,6 +209,24 @@ int main(int argc, char* argv[]) {
             << cumulative_operations / cumulative_time * 1e9 << " ops/sec"
             << std::endl;
 
+  //获取GLIN的存储开销(core/alex.h文件Alex结构体记录了相关开销信息)
+  auto stats = index.get_stats();
+
+  //获取单个节点最大大小 （字节）
+  int node_size = index.params_.max_node_size;
+  //计算所有节点：模型节点（索引的内部节点） + 数据节点（索引的叶子节点） 键只存储在数据节点里，模型节点不存储键值，只用于导航和定位数据节点。
+  int total_nodes = stats.num_model_nodes + stats.num_data_nodes;
+  //计算存储开销
+  long long total_storage = total_nodes * (long long)node_size;
+  //打印存储信息
+  std::cout<<"---------存储开销统计如下："<<std::endl;
+  std::cout<< "索引中有效键的数量:" <<stats.num_keys << std::endl;
+  std::cout << " 模型节点数：" << stats.num_model_nodes << std::endl; 
+  std::cout << " 数据节点数：" << stats.num_data_nodes << std::endl; 
+  std::cout << " 索引总节点数：" << total_nodes << std::endl;
+  std::cout << " 单个节点最大大小：" << node_size <<"字节"<< std::endl;
+  std::cout << " 索引总存储开销：" << total_storage << "字节 (约" << total_storage / (1024.0 * 1024) << "MB)" << std::endl;
+  
   delete[] keys;
   delete[] values;
 }

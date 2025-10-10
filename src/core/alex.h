@@ -66,7 +66,7 @@ namespace alex {
         typedef AlexModelNode<T, P, Alloc> model_node_type;
         typedef AlexDataNode<T, P, Compare, Alloc, allow_duplicates> data_node_type;
 
-        // Forward declaration for iterators
+        // Forward declaration for iterators //使用预顺序遍历所有节点
         class Iterator;
 
         class ConstIterator;
@@ -102,19 +102,19 @@ namespace alex {
         };
         Params params_;
 
-        /* Setting max node size automatically changes these parameters */
+        /* 最大节点大小 参数会自动更改 Setting max node size automatically changes these parameters */
         struct DerivedParams {
-            // The defaults here assume the default max node size of 16MB
+            // 单个节点最大大小，默认是16MB
             int max_fanout = 1 << 16;  // assumes 8-byte pointers
             int max_data_node_slots = (1 << 16) / sizeof(V);
         };
         DerivedParams derived_params_;
 
-        /* Counters, useful for benchmarking and profiling */
+        /* 计数器，用于基准测试和分析 Counters, useful for benchmarking and profiling */
         struct Stats {
             int num_keys = 0;
-            int num_model_nodes = 0;  // num model nodes
-            int num_data_nodes = 0;   // num data nodes
+            int num_model_nodes = 0;  // num model nodes 模型节点
+            int num_data_nodes = 0;   // num data nodes  数据节点
             int num_expand_and_scales = 0;
             int num_expand_and_retrains = 0;
             int num_downward_splits = 0;
@@ -133,15 +133,17 @@ namespace alex {
         };
         Stats stats_;
 
-        /* These are for research purposes, a user should not change these */
+        /* 这是参数是GLIN的研究目的，不能更改 These are for research purposes, a user should not change these */
         struct ExperimentalParams {
             // Fanout selection method used during bulk loading: 0 means use bottom-up
             // fanout tree, 1 means top-down
+            /*批量加载时使用的扇出选择方法：0表示自下而上 扇形树，1表示自顶向下 */
             int fanout_selection_method = 0;
             // Policy when a data node experiences significant cost deviation.
             // 0 means always split node in 2
             // 1 means decide between no splitting or splitting in 2
             // 2 means use a full fanout tree to decide the splitting strategy
+            /**/
             int splitting_policy_method = 1;
             // Splitting upwards means that a split can propagate all the way up to the
             // root, like a B+ tree

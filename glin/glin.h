@@ -141,6 +141,25 @@ namespace alex {
 //            for(int i =0; i < num_of_keys; i++){
 //                std::cout<<"start_point," <<  i << ","<< std::to_string( new_values[i].first )<< std::endl;
 //            }
+            //一个人
+            //输出CDF数据到zmin_cdf.csv
+            std::ofstream cdf_file("./../zmin_cdf.csv");
+            if(cdf_file.is_open())
+            {            
+                std::cout<<"zmin_cdf.csv打开成功！"<<std::endl;
+                //写入表头
+                cdf_file << "zmin,累积比例\n";
+                for(int i = 0; i < num_of_keys; i++)
+                {
+                    double zmin = new_values[i].first;
+                    double cdf = (double)i / num_of_keys; //计算cdf数值
+                    cdf_file << zmin <<","<< cdf <<"\n";
+                }
+                cdf_file.close();
+            }
+            else{
+                std::cout<<"zmin_cdf.csv打开失败!"<<std::endl;
+            }
             alex::Alex<T, P>::bulk_load(new_values, num_of_keys);
             delete[] new_values;
         }
