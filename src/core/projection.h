@@ -56,15 +56,17 @@ void curve_shape_projection(geos::geom::Geometry *geometry, std::string curve_ty
     double maxY = envelope->getMaxY();
 
 
-    auto encoder = new Encoder<double>(cell_xmin, cell_x_intvl, cell_ymin, cell_y_intvl );
+    // auto encoder = new Encoder<double>(cell_xmin, cell_x_intvl, cell_ymin, cell_y_intvl );
+    //这是还是不要用new了，如果数据很多的话，每一次函数调用 都要new一个新的Encoder对象，但是好像并没有delete掉，会慢慢耗尽内存
+    Encoder<double> encoder(cell_xmin, cell_x_intvl, cell_ymin, cell_y_intvl );
 
     if(curve_type == "h"){
-            auto index_double_h = encoder->encode_h(minX,minY,maxX,maxY);
+            auto index_double_h = encoder.encode_h(minX,minY,maxX,maxY);
             dist_start = index_double_h.first;
             dist_end = index_double_h.second;
     }
     if(curve_type == "z"){
-        auto index_z = encoder->encode_z(minX,minY,maxX,maxY);
+        auto index_z = encoder.encode_z(minX,minY,maxX,maxY);
         dist_start = index_z.first;
         dist_end = index_z.second;
     }

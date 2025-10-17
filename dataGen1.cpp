@@ -115,7 +115,7 @@ int main()
             if (last_paren_pos != std::string::npos) {
                 wkt_string = line.substr(0, last_paren_pos + 1);
                 // 清理可能存在的尾部空格
-                wkt_string.erase(wkt_string.find_last_not_of(" \t\n\r") + 1);
+                wkt_string.erase(wkt_string.find_last_not_of(" \t\n\r") + 1);//只接收一个参数，表示删除从该参数指定的当前位置开始，到字符串末尾的所有字符
             } else {
                 continue; // 无效行，跳过
             }

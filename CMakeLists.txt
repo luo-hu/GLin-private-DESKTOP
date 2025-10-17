@@ -181,6 +181,24 @@ target_link_libraries(my_glin_test PRIVATE
 )
 target_include_directories(my_glin_test PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core;${Boost_INCLUDE_DIRS}>")
 
+# 10. 目标 3: （简化链接，避免重复）
+add_executable(tmp tmp.cpp ./glin/hilbert/hilbert.h ./glin/hilbert/hilbert.cpp)
+# 合并重复的 target_link_libraries，避免冗余
+target_link_libraries(tmp PRIVATE 
+    ${GEOS_LIBRARY}  # 直接使用 GEOS_LIBRARY（已验证路径正确）
+    ${Boost_SYSTEM_LIBRARY}  # 直接使用 Boost 动态库
+)
+target_include_directories(tmp PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core;${Boost_INCLUDE_DIRS}>")
+
+# 10. 目标 3: （简化链接，避免重复）
+add_executable(tmp1 tmp1.cpp ./glin/hilbert/hilbert.h ./glin/hilbert/hilbert.cpp)
+# 合并重复的 target_link_libraries，避免冗余
+target_link_libraries(tmp1 PRIVATE 
+    ${GEOS_LIBRARY}  # 直接使用 GEOS_LIBRARY（已验证路径正确）
+    ${Boost_SYSTEM_LIBRARY}  # 直接使用 Boost 动态库
+)
+target_include_directories(tmp1 PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core;${Boost_INCLUDE_DIRS}>")
+
 
 #    目标 4： src/becnch/main.cpp
     # 添加基准测试可执行文件

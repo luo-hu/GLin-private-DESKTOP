@@ -106,7 +106,7 @@ namespace alex {
         }
 
         /*
-         * load with curve projection
+         * load with curve projection  加载曲线投影
          */
         void loadCurve(std::vector<geos::geom::Geometry *> geom, double pieceLimitation, std::string curve_type,
                        double cell_xmin, double cell_ymin,
@@ -164,6 +164,65 @@ namespace alex {
             delete[] new_values;
         }
 
+  void loadCurve1(std::vector<geos::geom::Geometry *> geom, double pieceLimitation, std::string curve_type,
+                       double cell_xmin, double cell_ymin,
+                       double cell_x_intvl, double cell_y_intvl,
+                       std::vector<std::tuple<double, double, double, double>> &pieces,
+                        int batch_index,
+                        std::ofstream& cdf_stream) {
+            auto num_of_keys = geom.size();
+            //values for bulkload
+            std::pair<double, double> *values = new std::pair<double, double>[num_of_keys];
+            //values save for future search
+            std::pair<double, geos::geom::Geometry *> *new_values = new std::pair<double, geos::geom::Geometry *>[num_of_keys];
+
+            for (auto i = 0; i < num_of_keys; i++) {
+                double min = 0;
+                double max = 0;
+                // add projected range start and end to the first pair
+                curve_shape_projection(geom[i], curve_type, cell_xmin, cell_ymin, cell_x_intvl, cell_y_intvl, min, max);
+                //assert((max-min)!=0);
+                values[i].first = min;
+                values[i].second = max;
+                // store a startpoint, geometry pair for future using to load into actual index
+                new_values[i].first = min;
+                new_values[i].second = geom[i];
+            }
+#ifdef PIECE
+            piecewise(values, num_of_keys, pieceLimitation, pieces);
+#endif
+
+            delete[] values;
+            // sort by start point
+            std::sort(new_values, new_values + num_of_keys);
+            // to print out cdf
+//            for(int i =0; i < num_of_keys; i++){
+//                std::cout<<"start_point," <<  i << ","<< std::to_string( new_values[i].first )<< std::endl;
+//            }
+   
+
+         
+            //输出CDF数据到zmin_cdf.csv
+            if(cdf_stream.is_open())
+            {
+                // 只在第一个批次 (batch_index == 0) 时写入表头
+                if (batch_index == 0) {
+                    cdf_stream << "zmin,累积比例\n";
+                }
+
+                // 循环写入当前批次的数据
+                for(int i = 0; i < num_of_keys; i++)
+                {
+                    double zmin = new_values[i].first;
+                    double cdf = (double)i / num_of_keys; // 注意：此CDF值是相对于当前批次的
+                    cdf_stream << zmin << "," << cdf << "\n";
+                }
+            }      
+            alex::Alex<T, P>::bulk_load(new_values, num_of_keys);
+            delete[] new_values;
+    }
+
+
 
         void bulk_load_with_lineseg(std::vector<geos::geom::Geometry *> geom, geos::geom::LineSegment segment,
                                     double pieceLimitation,
@@ -177,11 +236,26 @@ namespace alex {
             }
         }
 
+        // void glin_bulk_load(std::vector<geos::geom::Geometry *> geom, double pieceLimitation,
+        //                     std::string curve_type,
+        //                     double cell_xmin, double cell_ymin,
+        //                     double cell_x_intvl, double cell_y_intvl,
+        //                     std::vector<std::tuple<double, double, double, double>> &pieces) {
+        //     loadCurve(geom, pieceLimitation, curve_type, cell_xmin, cell_ymin, cell_x_intvl, cell_y_intvl,
+        //               pieces);
+        //     auto it_start = this->begin();
+        //     auto it_end = this->end();
+        //     // Generate the MBR in each leaf node (data node)
+        //     for (auto it = it_start; it != it_end; it.it_update_mbr()) {
+        //     }
+        // }//增加一个参数std::ofstream cdf_stream
+
         void glin_bulk_load(std::vector<geos::geom::Geometry *> geom, double pieceLimitation,
                             std::string curve_type,
                             double cell_xmin, double cell_ymin,
                             double cell_x_intvl, double cell_y_intvl,
-                            std::vector<std::tuple<double, double, double, double>> &pieces) {
+                            std::vector<std::tuple<double, double, double, double>> &pieces
+                            ) {
             loadCurve(geom, pieceLimitation, curve_type, cell_xmin, cell_ymin, cell_x_intvl, cell_y_intvl,
                       pieces);
             auto it_start = this->begin();
@@ -190,6 +264,23 @@ namespace alex {
             for (auto it = it_start; it != it_end; it.it_update_mbr()) {
             }
         }
+         void glin_bulk_load1(std::vector<geos::geom::Geometry *> geom, double pieceLimitation,
+                            std::string curve_type,
+                            double cell_xmin, double cell_ymin,
+                            double cell_x_intvl, double cell_y_intvl,
+                            std::vector<std::tuple<double, double, double, double>> &pieces,
+                            int batch_index,
+                            std::ofstream& cdf_stream) {
+
+            loadCurve1(geom, pieceLimitation, curve_type, cell_xmin, cell_ymin, cell_x_intvl, cell_y_intvl,
+                      pieces,batch_index,cdf_stream);
+            auto it_start = this->begin();
+            auto it_end = this->end();
+            // Generate the MBR in each leaf node (data node)
+            for (auto it = it_start; it != it_end; it.it_update_mbr()) {
+            }
+        }
+
 
         static bool sortbysec(const std::tuple<double, double, double, double> &a,
                               const std::tuple<double, double, double, double> &b) {
