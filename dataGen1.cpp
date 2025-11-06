@@ -12,10 +12,19 @@
 #include <geos/geom/MultiPolygon.h>
 #include <geos/geom/Envelope.h>
 #include <geos/io/WKTReader.h>
-
+#include <iomanip>  // 新增：用于 std::fixed 和 std::setprecision（控制double输出格式）
 // 确保这些路径相对于你的编译环境是正确的
 #include "../../glin/glin.h" // GLIN索引的头文件
 
+// 新增：CSV字段转义函数（处理引号和特殊字符）
+std::string escape_csv_field(const std::string& field) 
+{
+    std::string escaped = field;
+    // CSV规则：字段中的单个引号替换为两个引号
+    std::replace(escaped.begin(), escaped.end(), '"', '"');
+    // 用引号包裹整个字段，避免逗号被误识别为分隔符
+    return "\"" + escaped + "\"";
+}
 // 处理WKT多边形字符串，并转换为GEOS几何对象 (现在支持POLYGON和MULTIPOLYGON)
 geos::geom::Geometry* createGeometryFromWKT(const std::string& wkt)
 {
@@ -132,7 +141,7 @@ int main()
                 double dist_start, dist_end;
                 curve_shape_projection(env, curve_type, xmin, ymin, cell_xintvl, cell_yinval, dist_start, dist_end);
                 zAddresses.push_back(dist_start);
-                zAddresses.push_back(dist_end);
+                // zAddresses.push_back(dist_end);只要Zmin即可
             }
             delete geometry; // 释放内存
         }
@@ -146,12 +155,35 @@ int main()
         return 1;
     }
 
-    for (double zAddress : zAddresses) {
-        outputFile.write(reinterpret_cast<const char*>(&zAddress), sizeof(double));
+    std::ofstream csv_Z_OutputFile("./areawater_z.csv");
+    if (!csv_Z_OutputFile.is_open()) {
+        std::cerr << "打开CSV输出文件 ./areawater_z.csv 失败" << std::endl;
+        return 1;
     }
-    outputFile.close();
+    // 写入CSV表头（可选但推荐，方便后续读取识别字段）
+    csv_Z_OutputFile << "Key_min" << std::endl;
+    //  立即检查表头是否写入成功（关键！定位是否此处失败）
+    if (!csv_Z_OutputFile.good()) {
+        std::cerr << "错误：表头\"Key_min\"写入失败！可能是磁盘权限或空间问题。" << std::endl;
+        csv_Z_OutputFile.close();
+        return 1;
+    }
+    // 控制double输出格式：固定小数位（避免科学计数法，保留6位小数，兼顾精度）
+    csv_Z_OutputFile << std::fixed << std::setprecision(15);
+    int k = 0;
+    for (double zAddress : zAddresses) {
+        if(k % 100000 == 0) std::cout<<"zAddress值已写入"<<k<<"个"<<"zAddress:"<<zAddress<<std::endl;
+        //outputFile.write(reinterpret_cast<const char*>(&zAddress), sizeof(double));
+        // 写入CSV文件（文本格式，每个zAddress占一行）
+        csv_Z_OutputFile << zAddress << std::endl;
+        k++;
+    }
 
-    std::cout << "处理完成，" << zAddresses.size() << " 个地址已写入二进制文件。" << std::endl;
+    outputFile.close();
+    csv_Z_OutputFile.close();
+    // std::cout << "处理完成，" << zAddresses.size() << " 个地址已写入二进制文件。" << std::endl;
+    // std::cout << "有效WKT字符串已写入 CSV 文件：./processed_wkt.csv" << std::endl; // 新增：提示CSV路径
+    std::cout << zAddresses.size() << " 个zAddress值已写入CSV文件 ./areawater_z.csv。" << std::endl;
 
     return 0;
 }
