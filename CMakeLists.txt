@@ -108,13 +108,19 @@ set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake) # 保持不变
 
 # -------------------------- 1. 仅在 find_package(Boost) 前设置路径（只执行一次）--------------------------
 set(Boost_NO_SYSTEM_PATHS ON)  # 禁用系统默认路径，只认手动指定的 1.67.0
-set(BOOST_INCLUDE_DIR "/usr/local/boost-1.67/include" CACHE PATH "Boost 头文件目录")
-set(BOOST_LIBRARY_DIR "/usr/local/boost-1.67/lib" CACHE PATH "Boost 库文件目录")
+set(BOOST_INCLUDE_DIR "/usr/local/include" CACHE PATH "Boost 头文件目录")
+set(BOOST_LIBRARY_DIR "/usr/local/lib" CACHE PATH "Boost 库文件目录")
 set(Boost_INCLUDE_DIRS ${BOOST_INCLUDE_DIR})
 set(Boost_LIBRARY_DIRS ${BOOST_LIBRARY_DIR})
 set(Boost_VERSION 1.67.0)  # 显式指定版本
 set(Boost_USE_STATIC_LIBS OFF)  # 明确使用动态库（你的系统中存在 libboost_system.so）
 set(Boost_USE_MULTITHREADED ON)  # 启用多线程（Boost 必需）
+
+# 告诉 find_package(GEOS) 去哪里找
+set(GEOS_INCLUDE_DIR "/usr/local/geos/include" CACHE PATH "GEOS 头文件目录")
+set(GEOS_LIBRARY_DIR "/usr/local/geos/lib" CACHE PATH "GEOS 库文件目录")
+set(GEOS_INCLUDE_DIR ${GEOS_INCLUDE_DIR})
+set(GEOS_LIBRARY_DIR ${GEOS_LIBRARY})
 # --------------------------------------------------------------------------------------------------------
 
 # 2. 只调用一次 find_package(Boost)，确保路径生效
