@@ -28,11 +28,25 @@ using STRtree = geos::index::strtree::STRtree;  // 别名兼容旧代码
 #include <geos/geom/Polygon.h>
 #include <geos/io/WKTReader.h>
 #include <geos/algorithm/Angle.h>
+#include "bloom_filter.h"
+#include "hierarchical_mbr.h"
+#include <unordered_map>
+
 namespace alex {
     template<class T, class P, class Compare = AlexCompare,
             class Alloc = std::allocator<std::pair<T, P>>,
             bool allow_duplicates = true>
     class Glin : public Alex<T, P, Compare, Alloc, allow_duplicates> {
+    private:
+        //新增：扩展叶子节点结构（原GLIN的叶子节点结构仅存储MBR和数据，这里增加了过滤器
+        struct LeafNodeExt{
+            BloomFilter<1024,3>bloom;//这是布隆过滤器（1024位，3个哈希）
+            HierarchicalMBR h_mbr;//分层MBR（深度为3，每节点最多10个几何）
+            // // 存储每个叶子节点的扩展信息（与原叶子节点一一对应）
+            // std::unordered_map<void*, LeafNodeExt> leaf_ext_map;  // 
+        };
+        // 存储叶子节点扩展信息,与原叶子节点一一对应（key为叶子节点指针）
+        std::unordered_map<void*, LeafNodeExt> leaf_ext_map;  // 确保在此处声明  
 
     public:
         std::chrono::nanoseconds index_probe_duration = std::chrono::nanoseconds::zero();
@@ -69,6 +83,8 @@ namespace alex {
                 geos::geom::LineSegment perpen_line = create_line_seg(0, 5, 0);
                 return perpen_line;
             }
+            // 新增：默认返回（避免无返回值）
+            return geos::geom::LineSegment(geos::geom::Coordinate(0, 0), geos::geom::Coordinate(5, 0));
         }
 
         /*
@@ -250,20 +266,122 @@ namespace alex {
         //     }
         // }//增加一个参数std::ofstream cdf_stream
 
+        // void glin_bulk_load(std::vector<geos::geom::Geometry *> geom, double pieceLimitation,
+        //                     std::string curve_type,
+        //                     double cell_xmin, double cell_ymin,
+        //                     double cell_x_intvl, double cell_y_intvl,
+        //                     std::vector<std::tuple<double, double, double, double>> &pieces
+        //                     ) {
+        //     loadCurve(geom, pieceLimitation, curve_type, cell_xmin, cell_ymin, cell_x_intvl, cell_y_intvl,
+        //               pieces);
+        //     auto it_start = this->begin();
+        //     auto it_end = this->end();
+        //     // Generate the MBR in each leaf node (data node)
+        //     for (auto it = it_start; it != it_end; it.it_update_mbr()) {
+        //         // 新增：获取当前叶子节点指针（假设迭代器的cur_leaf_指向叶子节点）
+        //         void* leaf_ptr = it.cur_leaf_;
+        //         // 初始化扩展结构
+        //         LeafNodeExt ext;
+        //         // 1. 收集当前叶子节点的所有几何对象（假设通过it访问叶子节点数据）
+        //         std::vector<geos::geom::Geometry*> leaf_geoms;
+        //         // 修正后（假设叶子节点用values_数组存储数据，num_keys_为有效数量）：
+        //         for (int j = 0; j < it.cur_leaf_->num_keys_; ++j) {  // num_keys_是叶子节点的有效数据量
+        //             if(ALEX_DATA_NODE_SEP_ARRAYS == 1)
+        //             {
+        //                 leaf_geoms.push_back(it.cur_leaf_->payload_slots_[j]); 
+        //             }
+        //             // else if(ALEX_DATA_NODE_SEP_ARRAYS == 0)
+        //             // {
+        //             //     leaf_geoms.push_back(it.cur_leaf_->data_slots_[j].second);  // 正确：通过 data_slots_ 的 second 访问值
+        //             // }
+        //         }
+
+        //         // 2. 构建布隆过滤器
+        //         for (auto g : leaf_geoms) {
+        //             ext.bloom.insert(g);
+        //         }
+        //         // 3. 构建分层MBR
+        //         ext.h_mbr.build(leaf_geoms);
+        //         // 4. 存储扩展信息
+        //         leaf_ext_map[leaf_ptr] = ext;
+        //     }
+        // }
         void glin_bulk_load(std::vector<geos::geom::Geometry *> geom, double pieceLimitation,
-                            std::string curve_type,
-                            double cell_xmin, double cell_ymin,
-                            double cell_x_intvl, double cell_y_intvl,
-                            std::vector<std::tuple<double, double, double, double>> &pieces
-                            ) {
-            loadCurve(geom, pieceLimitation, curve_type, cell_xmin, cell_ymin, cell_x_intvl, cell_y_intvl,
-                      pieces);
-            auto it_start = this->begin();
-            auto it_end = this->end();
-            // Generate the MBR in each leaf node (data node)
-            for (auto it = it_start; it != it_end; it.it_update_mbr()) {
-            }
-        }
+                    std::string curve_type,
+                    double cell_xmin, double cell_ymin,
+                    double cell_x_intvl, double cell_y_intvl,
+                    std::vector<std::tuple<double, double, double, double>> &pieces
+                   ) 
+                   {
+                        loadCurve(geom, pieceLimitation, curve_type, cell_xmin, cell_ymin, cell_x_intvl, cell_y_intvl, pieces);
+                        auto it_start = this->begin();
+                        auto it_end = this->end();
+
+                        // 遍历所有叶子节点
+                        for (auto it = it_start; it != it_end; it.it_update_mbr()) {
+                            void* leaf_ptr = it.cur_leaf_;
+                            LeafNodeExt ext;
+                            std::vector<geos::geom::Geometry*> leaf_geoms;
+                            //验证：检查叶子节点的num_keys_是否为 0
+                            std::cout << "[GLIN-BULK-LOAD] 叶子节点num_keys_：" << it.cur_leaf_->num_keys_ << std::endl;
+                                if (it.cur_leaf_->num_keys_ == 0) {
+                                    std::cerr << "[GLIN-BULK-LOAD] 警告：叶子节点无有效数据！" << std::endl;
+                                    continue;
+                                }
+                            // 遍历叶子节点的有效数据（num_keys_ 是实际存储的对象数量）
+                            for (int j = 0; j < it.cur_leaf_->num_keys_; ++j) {
+                                geos::geom::Geometry* g = nullptr;
+
+                                // 根据宏定义选择访问方式（避免宏调用错误）
+                                // if (ALEX_DATA_NODE_SEP_ARRAYS == 1) {
+                                //     // 分离数组模式：payload_slots_ 存储几何对象指针
+                                //     g = it.cur_leaf_->payload_slots_[j];
+                                // }
+                                // else {
+                                //     // 合并数组模式：data_slots_ 是 std::pair，second 存储几何对象指针
+                                //     g = it.cur_leaf_->data_slots_[j].second;
+                                // }
+                                std::cout<<"ALEX_DATA_NODE_SEP_ARRAYS:"<<ALEX_DATA_NODE_SEP_ARRAYS<<std::endl;
+                                if(ALEX_DATA_NODE_SEP_ARRAYS == 0) std::cout<<"ALEX_DATA_NODE_SEP_ARRAYS = 0"<<std::endl; 
+                                if(ALEX_DATA_NODE_SEP_ARRAYS == 1) std::cout<<"ALEX_DATA_NODE_SEP_ARRAYS = 1"<<std::endl; 
+                       
+                                #if ALEX_DATA_NODE_SEP_ARRAYS == 1
+                                    // 分离数组模式：直接访问payload_slots_
+                                    g = it.cur_leaf_->payload_slots_[j];
+                                #else
+                                    // 合并数组模式：访问data_slots_的second
+                                    g = it.cur_leaf_->data_slots_[j].second;
+                                #endif
+
+                                // 双重检查：避免空指针和越界
+                                if (j >= it.cur_leaf_->num_keys_) {
+                                    std::cerr << "[GLIN-BULK-LOAD] 警告：j=" << j << " 超出num_keys_=" << it.cur_leaf_->num_keys_ << std::endl;
+                                    break;
+                                }
+                                // 检查指针是否指向合理的内存区域（示例：堆地址通常以0x55或0x7f开头）
+                                uintptr_t addr = reinterpret_cast<uintptr_t>(g);
+                                if (addr < 0x1000 || (addr >= 0x7f0000000000 && addr < 0x7fffffffffff) == false) {
+                                    std::cerr << "[警告] j=" << j << " 指针地址无效（" << g << "），跳过" << std::endl;
+                                    continue;
+                                }
+                                if (!g) {
+                                    std::cerr << "[GLIN-BULK-LOAD] 警告：叶子节点j=" << j << "的几何对象为空指针，跳过！" << std::endl;
+                                    continue;
+                                }
+                                
+                                leaf_geoms.push_back(g);
+                            }
+
+                            // 构建布隆过滤器（仅处理非空对象）
+                            for (auto g : leaf_geoms) {
+                                ext.bloom.insert(g);
+                            }
+                            // 构建分层MBR
+                            ext.h_mbr.build(leaf_geoms);
+                            // 存储叶子节点扩展信息
+                            leaf_ext_map[leaf_ptr] = ext;
+                        }
+                    }
          void glin_bulk_load1(std::vector<geos::geom::Geometry *> geom, double pieceLimitation,
                             std::string curve_type,
                             double cell_xmin, double cell_ymin,
@@ -487,30 +605,74 @@ namespace alex {
         /*
          * refine with curve and skip node with mbr checking
          */
+//         void refine_with_curveseg(geos::geom::Geometry *query_window, typename alex::Alex<T, P>::Iterator it_start, double max_end,
+//                                   std::vector<geos::geom::Geometry *> &find_result, int &count_filter) {
+//             // refine the query result
+//             typename alex::Alex<T, P>::Iterator it;
+//             geos::geom::Envelope env_query_window = *query_window->getEnvelopeInternal();
+//             for (it = it_start; it.cur_leaf_ != nullptr && it.key() <= max_end; it.it_check_mbr(&env_query_window, max_end)) {
+//                 geos::geom::Geometry *payload = it.payload();
+// #ifdef PIECE
+//                 if (query_window->intersects(payload)) {
+//                     find_result.push_back(payload);
+//                 }
+// #else
+//                 if(query_window->contains(payload)){
+//                     find_result.push_back(payload);
+//                 }
+// #endif
+//                 //count all geometries after the probe
+//                 count_filter += 1;
+//             }
+// //            assert(find_result.size() != 0);
+// //            assert(count_filter!=0);
+//             avg_num_visited_leaf = it.num_visited_leaf;
+//             avg_num_loaded_leaf = it.num_loaded_leaf;
+// //            std::cout << "num visited leaf " << it.num_visited_leaf << " num loaded leaf " << it.num_loaded_leaf << std::endl;
+//         }
         void refine_with_curveseg(geos::geom::Geometry *query_window, typename alex::Alex<T, P>::Iterator it_start, double max_end,
                                   std::vector<geos::geom::Geometry *> &find_result, int &count_filter) {
-            // refine the query result
-            typename alex::Alex<T, P>::Iterator it;
             geos::geom::Envelope env_query_window = *query_window->getEnvelopeInternal();
-            for (it = it_start; it.cur_leaf_ != nullptr && it.key() <= max_end; it.it_check_mbr(&env_query_window, max_end)) {
-                geos::geom::Geometry *payload = it.payload();
+            typename alex::Alex<T, P>::Iterator it;
+            for (it = it_start; it.cur_leaf_ != nullptr && it.key() <= max_end; 
+                 it.it_check_mbr(&env_query_window, max_end)) {  // 原逻辑：检查叶子节点MBR
+                // 新增：获取当前叶子节点的扩展信息
+                void* leaf_ptr = it.cur_leaf_;
+                // 新增：检查cur_leaf_是否为nullptr
+                if (leaf_ptr == nullptr) {
+                    continue;
+                }
+                // 新增：检查leaf_ext_map中是否存在该key
+                auto ext_iter = leaf_ext_map.find(leaf_ptr);
+                if (ext_iter == leaf_ext_map.end()) {
+                    continue;
+                }
+                LeafNodeExt& ext = leaf_ext_map[leaf_ptr];
+
+                // 步骤1：布隆过滤器快速过滤（若查询窗口不可能匹配，跳过整个叶子节点）
+                if (!ext.bloom.might_contain(query_window)) {
+                    // count_filter += it.cur_leaf_->size();  // 统计过滤的数量
+                    count_filter += it.cur_leaf_->num_keys_;
+                    continue;  // 跳过当前叶子节点
+                }
+
+                // 步骤2：分层MBR缩小范围（只取与查询窗口相交的子组）
+                std::vector<geos::geom::Geometry*> mbr_candidates = ext.h_mbr.query(env_query_window);
+
+                // 步骤3：最终几何校验（原逻辑，但候选集已缩小）
+                for (auto payload : mbr_candidates) {
 #ifdef PIECE
-                if (query_window->intersects(payload)) {
-                    find_result.push_back(payload);
-                }
+                    if (query_window->intersects(payload)) {
 #else
-                if(query_window->contains(payload)){
-                    find_result.push_back(payload);
-                }
+                    if (query_window->contains(payload)) {
 #endif
-                //count all geometries after the probe
-                count_filter += 1;
+                        find_result.push_back(payload);
+                    }
+                    count_filter += 1;  // 统计实际校验的数量
+                }
             }
-//            assert(find_result.size() != 0);
-//            assert(count_filter!=0);
             avg_num_visited_leaf = it.num_visited_leaf;
             avg_num_loaded_leaf = it.num_loaded_leaf;
-//            std::cout << "num visited leaf " << it.num_visited_leaf << " num loaded leaf " << it.num_loaded_leaf << std::endl;
         }
 
         /*
@@ -597,7 +759,7 @@ namespace alex {
             long double error_sum = 0.0;
             long double error_avg = 0.0;
 
-            for (int i = 0; i < pieces.size(); i++) {
+            for (size_t i = 0; i < pieces.size(); i++) {
                 int count = std::get<2>(pieces[i]);
                 double max = std::get<1>(pieces[i]);
                 double sum = std::get<3>(pieces[i]);

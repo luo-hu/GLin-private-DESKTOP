@@ -67,6 +67,7 @@
         "typeinfo": "cpp",
         "variant": "cpp",
         "numbers": "cpp",
-        "semaphore": "cpp"
+        "semaphore": "cpp",
+        "unordered_set": "cpp"
     }
 }
