@@ -2767,8 +2767,15 @@ namespace alex {
                         // Check MBR. Skip leaves until the leaf's MBR intersects the query window
                         // use JTS disjoint logic to check boundaries
                         //int is_disjoint = GEOSDisjoint(query_window, cur_leaf_->mbr);//GEOSDisjoint是C++的API,返回1表示不相交 0表示相交 -1表示错误; //didjoint是C语言的API,true表示不相交，false表示相交或错误
-                        while (cur_leaf_ != nullptr&& cur_leaf_->max_key_ < max_end && query_window->intersects(cur_leaf_->mbr)) { 
-                        //while (cur_leaf_ != nullptr&& cur_leaf_->max_key_ < max_end && is_disjoint == 1) {
+                       /*
+                        这个循环条件好像不对，要改用下面的（claude发现）
+                             while (cur_leaf_ != nullptr&& cur_leaf_->max_key_ < max_end && query_window->intersects(cur_leaf_->mbr)) { 
+                            //while (cur_leaf_ != nullptr&& cur_leaf_->max_key_ < max_end && is_disjoint == 1) {
+                            cur_leaf_ = cur_leaf_->next_leaf_;
+                            num_visited_leaf++;
+                            }
+                       */
+                        while (cur_leaf_ != nullptr&& cur_leaf_->max_key_ < max_end && !query_window->intersects(cur_leaf_->mbr)) {
                             cur_leaf_ = cur_leaf_->next_leaf_;
                             num_visited_leaf++;
                         }

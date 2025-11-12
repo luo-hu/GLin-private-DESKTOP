@@ -216,6 +216,15 @@ target_include_directories(test_glin_hf PUBLIC
     "${Boost_INCLUDE_DIRS}"
 )
 
+add_executable(my_glin_test indexBuildAndFindByMe.cpp ./glin/hilbert/hilbert.h ./glin/hilbert/hilbert.cpp)
+# 合并重复的 target_link_libraries，避免冗余
+target_link_libraries(my_glin_test PRIVATE 
+    ${GEOS_LIBRARY}  # 直接使用 GEOS_LIBRARY（已验证路径正确）
+    ${Boost_SYSTEM_LIBRARY}  # 直接使用 Boost 动态库
+)
+target_include_directories(my_glin_test PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core;${Boost_INCLUDE_DIRS}>")
+
+
 # -------------------------- 测试配置 --------------------------
 enable_testing()
 add_test(test_glin test_glin_piece dataGen)

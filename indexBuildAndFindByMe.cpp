@@ -198,7 +198,7 @@ int main()
 
     // };
     //大量数据还是需要从CSV文件中直接读取WKT字符串
-    std::ifstream inputFile("/mnt/hgfs/ShareFiles/AREAWATER.csv");
+    std::ifstream inputFile("/mnt/hgfs/sharedFolder/AREAWATER.csv");
     if(!inputFile.is_open())
     {
         std::cerr<<"打开AREAWATER.csv失败！"<<std::endl;

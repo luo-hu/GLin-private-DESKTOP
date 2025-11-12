@@ -12,8 +12,8 @@
 
 #include "alex_base.h"
 
-// Whether we store key and payload arrays separately in data nodes
-// By default, we store them separately
+// 是否在数据节点中分别存储键和有效负载数组 Whether we store key and payload arrays separately in data nodes
+// 默认情况下，我们将它们分开存储 By default, we store them separately
 #define ALEX_DATA_NODE_SEP_ARRAYS 1
 
 #if ALEX_DATA_NODE_SEP_ARRAYS
@@ -28,15 +28,18 @@
 // the closest gap).
 // If your hardware does not support lzcnt/tzcnt (e.g., your Intel CPU is
 // pre-Haswell), set this to 0.
+/*在操作位图时是否使用lzcnt和tzcnt(例如最接近的差距)。
+如果你的硬件不支持lzcnt/tzcnt(例如，你的Intel CPU是
+pre-Haswell)，设置为0。*/
 #define ALEX_USE_LZCNT 1
 
 namespace alex {
 
-// A parent class for both types of ALEX nodes
+// 两种类型的ALEX节点的父类 A parent class for both types of ALEX nodes
     template<class T, class P>
     class AlexNode {
     public:
-        // Whether this node is a leaf (data) node
+        // 是否是叶子节点 Whether this node is a leaf (data) node
         bool is_leaf_ = false;
 
         // Power of 2 to which the pointer to this node is duplicated in its parent
