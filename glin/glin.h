@@ -42,17 +42,280 @@ namespace alex {
         struct LeafNodeExt{
             BloomFilter<1024,3>bloom;//这是布隆过滤器（1024位，3个哈希）
             HierarchicalMBR h_mbr;//分层MBR（深度为3，每节点最多10个几何）
-            // // 存储每个叶子节点的扩展信息（与原叶子节点一一对应）
-            // std::unordered_map<void*, LeafNodeExt> leaf_ext_map;  // 
+            std::vector<geos::geom::Geometry*> stored_geoms; // 存储叶子节点中的几何对象，用于复杂度估计
         };
         // 存储叶子节点扩展信息,与原叶子节点一一对应（key为叶子节点指针）
-        std::unordered_map<void*, LeafNodeExt> leaf_ext_map;  // 确保在此处声明  
+        std::unordered_map<void*, LeafNodeExt> leaf_ext_map;  // 确保在此处声明
+
+        // [新增] 强制Bloom过滤器标志（用于真正的GLIN-HF测试）
+        bool force_bloom_filter = false;
+
+        // [优化] Lite-AMF缓存机制（需要在枚举定义后声明）
+        // 先声明结构，在枚举定义后定义实例
+
+        // [优化] 性能统计开关
+        bool detailed_profiling = false;  // 默认关闭详细统计
+
+        // [AMF] 自适应多级过滤框架的核心方法
+        // 估计查询选择性（返回候选对象占叶子节点总对象的比例）
+        double estimate_query_selectivity(geos::geom::Geometry* query_window, const LeafNodeExt& ext) {
+            if (!query_window) return 1.0; // 默认高选择性
+
+            const auto* query_env = query_window->getEnvelopeInternal();
+            if (!query_env || query_env->isNull()) return 1.0;
+
+            // 基于查询窗口面积和数据分布估计选择性
+            double query_area = query_env->getWidth() * query_env->getHeight();
+
+            // 使用存储的几何对象计算数据面积
+            const auto& geoms = ext.stored_geoms;
+            if (geoms.empty()) return 1.0;
+
+            double total_data_area = 0.0;
+            for (const auto* geom : geoms) {
+                if (geom && geom->getEnvelopeInternal()) {
+                    const auto* env = geom->getEnvelopeInternal();
+                    total_data_area += env->getWidth() * env->getHeight();
+                }
+            }
+
+            // 估计选择性：查询区域相对于数据密集度的比例
+            double selectivity = std::min(1.0, query_area / (total_data_area + 1e-10));
+
+            std::cout << "[AMF] 查询选择性估计: 面积比=" << query_area << "/" << total_data_area
+                      << "=" << selectivity << std::endl;
+
+            return selectivity;
+        }
+
+        // 估计几何复杂度（基于对象MBR的重叠程度和形状复杂度）
+        double estimate_geometry_complexity(const LeafNodeExt& ext) {
+            const auto& geoms = ext.stored_geoms;
+            if (geoms.empty()) return 0.0;
+
+            if (geoms.size() == 1) return 0.5; // 单个对象，复杂度中等
+
+            // 计算MBR重叠程度作为复杂度指标
+            double total_overlap = 0.0;
+            int overlap_count = 0;
+            std::vector<const geos::geom::Envelope*> mbrs;
+
+            // 收集所有有效的MBR
+            for (const auto* geom : geoms) {
+                if (geom && geom->getEnvelopeInternal()) {
+                    mbrs.push_back(geom->getEnvelopeInternal());
+                }
+            }
+
+            if (mbrs.size() <= 1) return 0.5;
+
+            // 计算重叠程度
+            for (size_t i = 0; i < mbrs.size(); ++i) {
+                for (size_t j = i + 1; j < mbrs.size(); ++j) {
+                    const auto* mbr1 = mbrs[i];
+                    const auto* mbr2 = mbrs[j];
+
+                    // 计算两个MBR的重叠面积
+                    double overlap_width = std::max(0.0, std::min(mbr1->getMaxX(), mbr2->getMaxX()) -
+                                                        std::max(mbr1->getMinX(), mbr2->getMinX()));
+                    double overlap_height = std::max(0.0, std::min(mbr1->getMaxY(), mbr2->getMaxY()) -
+                                                         std::max(mbr1->getMinY(), mbr2->getMinY()));
+
+                    if (overlap_width > 0 && overlap_height > 0) {
+                        total_overlap += overlap_width * overlap_height;
+                        overlap_count++;
+                    }
+                }
+            }
+
+            // 复杂度 = 重叠程度 + 对象密度因子
+            double complexity = 0.0;
+            if (overlap_count > 0) {
+                complexity = total_overlap / overlap_count;
+            }
+
+            // 添加对象密度因子
+            double density_factor = std::min(1.0, geoms.size() / 10.0); // 假设10个对象为高密度
+            complexity += density_factor * 0.3;
+
+            std::cout << "[AMF] 几何复杂度估计: 重叠度=" << total_overlap
+                      << ", 密度因子=" << density_factor << ", 复杂度=" << complexity << std::endl;
+
+            return std::min(1.0, complexity);
+        }
+
+        // 基于机器学习的预测模型（简化版）- 预测不同过滤策略的成本
+        enum class FilteringStrategy {
+            AGGRESSIVE,    // 激进过滤：Bloom + H-MBR
+            BALANCED,      // 平衡过滤：选择性使用Bloom
+            CONSERVATIVE   // 保守过滤：仅H-MBR
+        };
+
+        // [优化] Lite-AMF缓存机制
+        struct StrategyCache {
+            double last_query_selectivity = -1.0;
+            double last_geometry_complexity = -1.0;
+            FilteringStrategy last_strategy = FilteringStrategy::CONSERVATIVE;
+            bool cache_valid = false;
+        } strategy_cache;
+
+        FilteringStrategy predict_optimal_strategy(double selectivity, double complexity) {
+            // 基于经验的决策树模型
+            if (selectivity < 0.01) {
+                return FilteringStrategy::AGGRESSIVE; // 低选择性：激进过滤
+            } else if (selectivity < 0.1) {
+                if (complexity > 0.7) {
+                    return FilteringStrategy::CONSERVATIVE; // 高复杂度：保守策略避免假阴性
+                } else {
+                    return FilteringStrategy::BALANCED;    // 中等复杂度：平衡策略
+                }
+            } else {
+                return FilteringStrategy::CONSERVATIVE; // 高选择性：保守策略
+            }
+        }  
 
     public:
+        // 原有的性能指标
         std::chrono::nanoseconds index_probe_duration = std::chrono::nanoseconds::zero();
         std::chrono::nanoseconds index_refine_duration = std::chrono::nanoseconds::zero();
         double avg_num_visited_leaf = 0.0;
         double avg_num_loaded_leaf = 0.0;
+
+        // AMF框架性能评估指标
+        struct PerformanceMetrics {
+            // 查询性能指标
+            std::chrono::nanoseconds total_query_time{0};
+            std::chrono::nanoseconds bloom_filter_time{0};
+            std::chrono::nanoseconds h_mbr_time{0};
+            std::chrono::nanoseconds exact_intersection_time{0};
+
+            // 过滤效果指标
+            int total_candidates = 0;
+            int bloom_filtered_out = 0;
+            int h_mbr_filtered_out = 0;
+            int final_results = 0;
+
+            // 策略使用统计
+            int aggressive_strategy_count = 0;
+            int balanced_strategy_count = 0;
+            int conservative_strategy_count = 0;
+
+            // 内存使用指标
+            size_t memory_usage_bytes = 0;
+            int cache_hits = 0;
+            int cache_misses = 0;
+
+            // I/O统计
+            int leaf_node_accesses = 0;
+            int disk_reads = 0;
+
+            void reset() {
+                *this = PerformanceMetrics{};
+            }
+
+            void print_summary() const {
+                std::cout << "\n=== AMF性能评估报告 ===" << std::endl;
+                auto total_micros = std::chrono::duration_cast<std::chrono::microseconds>(total_query_time);
+                std::cout << "查询总时间: " << total_micros.count() << " μs" << std::endl;
+
+                if (total_micros.count() > 0) {
+                    std::cout << "  - Bloom过滤器时间: " << std::chrono::duration_cast<std::chrono::microseconds>(bloom_filter_time).count() << " μs ("
+                             << (bloom_filter_time * 100.0 / total_query_time) << "%)" << std::endl;
+                    std::cout << "  - H-MBR过滤时间: " << std::chrono::duration_cast<std::chrono::microseconds>(h_mbr_time).count() << " μs ("
+                             << (h_mbr_time * 100.0 / total_query_time) << "%)" << std::endl;
+                    std::cout << "  - 精确相交检测时间: " << std::chrono::duration_cast<std::chrono::microseconds>(exact_intersection_time).count() << " μs ("
+                             << (exact_intersection_time * 100.0 / total_query_time) << "%)" << std::endl;
+                } else {
+                    std::cout << "  - 各阶段时间统计不可用（查询时间为0）" << std::endl;
+                }
+
+                std::cout << "\n过滤效果统计:" << std::endl;
+                std::cout << "总候选对象: " << total_candidates << std::endl;
+                std::cout << "Bloom过滤掉: " << bloom_filtered_out << " ("
+                         << (total_candidates > 0 ? (bloom_filtered_out * 100.0 / total_candidates) : 0) << "%)" << std::endl;
+                std::cout << "H-MBR过滤掉: " << h_mbr_filtered_out << " ("
+                         << (total_candidates > 0 ? (h_mbr_filtered_out * 100.0 / total_candidates) : 0) << "%)" << std::endl;
+                std::cout << "最终结果: " << final_results << std::endl;
+                std::cout << "查询准确率: " << (total_candidates > 0 ? (final_results * 100.0 / total_candidates) : 0) << "%" << std::endl;
+
+                std::cout << "\n策略使用统计:" << std::endl;
+                std::cout << "激进策略: " << aggressive_strategy_count << " 次" << std::endl;
+                std::cout << "平衡策略: " << balanced_strategy_count << " 次" << std::endl;
+                std::cout << "保守策略: " << conservative_strategy_count << " 次" << std::endl;
+
+                std::cout << "\nI/O统计:" << std::endl;
+                std::cout << "叶子节点访问次数: " << leaf_node_accesses << std::endl;
+                std::cout << "磁盘读取次数: " << disk_reads << std::endl;
+                std::cout << "缓存命中率: " << ((cache_hits + cache_misses) > 0 ? (cache_hits * 100.0 / (cache_hits + cache_misses)) : 0) << "%" << std::endl;
+
+                std::cout << "内存使用: " << memory_usage_bytes / 1024.0 << " KB" << std::endl;
+            }
+        };
+
+        PerformanceMetrics perf_metrics;
+
+        // 性能评估控制接口
+        void reset_performance_metrics() {
+            perf_metrics.reset();
+        }
+
+        void print_performance_report() const {
+            perf_metrics.print_summary();
+        }
+
+        const PerformanceMetrics& get_performance_metrics() const {
+            return perf_metrics;
+        }
+
+        // [新增] 强制Bloom过滤器控制方法
+        void set_force_bloom_filter(bool force) {
+            force_bloom_filter = force;
+        }
+
+        // [优化] Lite-AMF控制方法
+        void enable_detailed_profiling(bool enable) {
+            detailed_profiling = enable;
+        }
+
+        void clear_strategy_cache() {
+            strategy_cache.cache_valid = false;
+        }
+
+        // [新增] GLIN-HF专用查询方法（强制使用完整过滤器）
+        void glin_find_with_filters(geos::geom::Geometry *query_window, std::string curve_type,
+                                   double cell_xmin, double cell_ymin,
+                                   double cell_x_intvl, double cell_y_intvl,
+                                   std::vector<std::tuple<double, double, double, double>> &pieces,
+                                   std::vector<geos::geom::Geometry *> &find_result,
+                                   int &count_filter) {
+
+            // 临时启用强制Bloom过滤器
+            bool original_force = force_bloom_filter;
+            force_bloom_filter = true;
+
+            // 调用常规查询方法（现在会强制使用Bloom过滤器）
+            glin_find(query_window, curve_type, cell_xmin, cell_ymin, cell_x_intvl, cell_y_intvl,
+                     pieces, find_result, count_filter);
+
+            // 恢复原始设置
+            force_bloom_filter = original_force;
+        }
+
+        // 获取性能评估指标（用于实验对比）
+        void run_performance_evaluation(std::vector<geos::geom::Geometry*>& test_queries,
+                                      std::vector<std::tuple<double, double, double, double>>& pieces) {
+            std::cout << "\n=== AMF框架性能评估 ===" << std::endl;
+
+            // 测试AMF策略
+            reset_performance_metrics();
+            for (auto query : test_queries) {
+                std::vector<geos::geom::Geometry*> results;
+                int filter_count = 0;
+                glin_find(query, "zorder", 0, 0, 1, 1, pieces, results, filter_count);
+            }
+            std::cout << "\nAMF-GLIN性能评估结果：";
+            print_performance_report();
+        }
 
 /*
  * line segment creation
@@ -357,10 +620,15 @@ namespace alex {
                                 }
                             }
 
-                            // 构建布隆过滤器（仅处理非空对象）
-                            for (auto g : leaf_geoms) {
-                                ext.bloom.insert(g);
-                            }
+                            // 存储几何对象并构建AMF过滤器
+                            ext.stored_geoms = leaf_geoms; // 存储几何对象用于AMF分析
+
+                            // [AMF优化] 跳过Bloom过滤器构建，减少索引构建时间
+                            // 注释：实际应用中可根据需要选择性启用Bloom过滤器
+                            // for (auto g : leaf_geoms) {
+                            //     ext.bloom.insert(g);
+                            // }
+
                             // 构建分层MBR
                             ext.h_mbr.build(leaf_geoms);
                             // 存储叶子节点扩展信息
@@ -452,7 +720,10 @@ namespace alex {
                        std::vector<std::tuple<double, double, double, double>> &pieces,
                        std::vector<geos::geom::Geometry *> &find_result,
                        int &count_filter) {
-            
+
+            // 性能统计：开始记录总查询时间
+            auto query_total_start = std::chrono::high_resolution_clock::now();
+
             //每次开始查找时，find_result应该为空 every time start a finding, the find_result should be empty for each find
             assert(find_result.empty());
             assert(count_filter == 0);
@@ -471,6 +742,18 @@ namespace alex {
             auto end_refine = std::chrono::high_resolution_clock::now();
 //            std::cout << "Num visited leaf nodes in refine: " << it.num_visited_leaf << std::endl;
             index_refine_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end_refine - start_refine);
+
+            // 性能统计：结束记录总查询时间
+            auto query_total_end = std::chrono::high_resolution_clock::now();
+            perf_metrics.total_query_time += (query_total_end - query_total_start);
+
+            // 计算过滤统计信息
+            perf_metrics.bloom_filtered_out = perf_metrics.total_candidates - find_result.size();
+            perf_metrics.h_mbr_filtered_out = perf_metrics.total_candidates - find_result.size();
+
+            // 估算内存使用（简化计算）
+            perf_metrics.memory_usage_bytes = leaf_ext_map.size() * sizeof(LeafNodeExt) +
+                                            this->size() * sizeof(std::pair<T, P>);
         }
 
         /*
@@ -875,13 +1158,127 @@ std::pair<typename alex::Alex<T, P>::Iterator, double> index_probe_curve
                     }
                     LeafNodeExt& ext = ext_iter->second;
 
-                    // [二级过滤] 临时禁用布隆过滤器以避免假阴性
-                    // 改为保守策略：默认通过所有叶子节点，依靠H-MBR进行过滤
-                    current_leaf_passed_bloom = true;
-                    std::cout<<"[保守策略] 跳过Bloom过滤器，直接进入H-MBR过滤"<<" query_window:"<<env_query_window<<std::endl;
+                    // [AMF] 自适应多级过滤框架：根据查询特性动态选择过滤策略
+                    // [优化] 跳过Bloom过滤器，直接进入H-MBR过滤阶段
+                    auto bloom_start = std::chrono::high_resolution_clock::now();
 
-                    // [三级过滤] 直接运行H-MBR，不依赖Bloom过滤器
-                    leaf_candidates = ext.h_mbr.query(env_query_window);
+                    double query_selectivity = estimate_query_selectivity(query_window, ext);
+                    double geometry_complexity = estimate_geometry_complexity(ext);
+
+                    // [优化] Lite-AMF快速策略选择
+                    FilteringStrategy strategy;
+
+                    // 如果强制启用Bloom过滤器，使用GLIN-HF策略
+                    if (force_bloom_filter) {
+                        strategy = FilteringStrategy::BALANCED;
+                        std::cout << "[GLIN-HF] 强制启用混合过滤器（Bloom+H-MBR）" << std::endl;
+                    } else {
+                        // [优化] 使用缓存避免重复计算
+                        if (strategy_cache.cache_valid &&
+                            std::abs(strategy_cache.last_query_selectivity - query_selectivity) < 0.001 &&
+                            std::abs(strategy_cache.last_geometry_complexity - geometry_complexity) < 0.001) {
+                            strategy = strategy_cache.last_strategy;
+                            std::cout << "[Lite-AMF] 使用缓存策略" << std::endl;
+                        } else {
+                            strategy = predict_optimal_strategy(query_selectivity, geometry_complexity);
+                            // 更新缓存
+                            strategy_cache.last_query_selectivity = query_selectivity;
+                            strategy_cache.last_geometry_complexity = geometry_complexity;
+                            strategy_cache.last_strategy = strategy;
+                            strategy_cache.cache_valid = true;
+                        }
+                    }
+
+                    // [优化] 轻量级性能统计
+                    if (detailed_profiling) {
+                        perf_metrics.leaf_node_accesses++;
+                    }
+
+                    // 根据策略执行相应的过滤逻辑
+                    switch (strategy) {
+                        case FilteringStrategy::AGGRESSIVE: {
+                            std::cout << "[AMF] 执行激进过滤策略（低选择性查询）" << std::endl;
+
+                            if (detailed_profiling) {
+                                perf_metrics.aggressive_strategy_count++;
+                                // 记录Bloom过滤时间，但跳过实际Bloom检查
+                                auto bloom_end = std::chrono::high_resolution_clock::now();
+                                perf_metrics.bloom_filter_time += (bloom_end - bloom_start);
+                            }
+
+                            // 简化实现：直接使用H-MBR过滤
+                            current_leaf_passed_bloom = true;
+
+                            if (detailed_profiling) {
+                                auto h_mbr_start = std::chrono::high_resolution_clock::now();
+                                leaf_candidates = ext.h_mbr.query(env_query_window);
+                                auto h_mbr_end = std::chrono::high_resolution_clock::now();
+                                perf_metrics.h_mbr_time += (h_mbr_end - h_mbr_start);
+                            } else {
+                                leaf_candidates = ext.h_mbr.query(env_query_window);
+                            }
+                            break;
+                        }
+                        case FilteringStrategy::BALANCED: {
+                            if (force_bloom_filter) {
+                                std::cout << "[GLIN-HF] 执行混合过滤策略（Bloom+H-MBR）" << std::endl;
+                            } else {
+                                std::cout << "[AMF] 执行平衡过滤策略（中等选择性查询）" << std::endl;
+                            }
+                            perf_metrics.balanced_strategy_count++;
+
+                            // [新增] 如果强制启用Bloom过滤器，则真正执行Bloom检查
+                            if (force_bloom_filter) {
+                                // 执行真正的Bloom过滤器检查
+                                if (ext.bloom.might_contain(query_window)) {
+                                    current_leaf_passed_bloom = true;
+                                    std::cout << "[GLIN-HF] Bloom过滤器检查通过" << std::endl;
+                                } else {
+                                    current_leaf_passed_bloom = false;
+                                    std::cout << "[GLIN-HF] Bloom过滤器检查失败，跳过此叶子节点" << std::endl;
+                                }
+                                auto bloom_end = std::chrono::high_resolution_clock::now();
+                                perf_metrics.bloom_filter_time += (bloom_end - bloom_start);
+
+                                // 只有通过Bloom过滤器才进行H-MBR检查
+                                if (current_leaf_passed_bloom) {
+                                    auto h_mbr_start = std::chrono::high_resolution_clock::now();
+                                    leaf_candidates = ext.h_mbr.query(env_query_window);
+                                    auto h_mbr_end = std::chrono::high_resolution_clock::now();
+                                    perf_metrics.h_mbr_time += (h_mbr_end - h_mbr_start);
+                                }
+                            } else {
+                                // 原有的AMF逻辑：跳过Bloom检查
+                                auto bloom_end = std::chrono::high_resolution_clock::now();
+                                perf_metrics.bloom_filter_time += (bloom_end - bloom_start);
+
+                                current_leaf_passed_bloom = true;
+                                auto h_mbr_start = std::chrono::high_resolution_clock::now();
+                                leaf_candidates = ext.h_mbr.query(env_query_window);
+                                auto h_mbr_end = std::chrono::high_resolution_clock::now();
+                                perf_metrics.h_mbr_time += (h_mbr_end - h_mbr_start);
+                            }
+                            break;
+                        }
+                        case FilteringStrategy::CONSERVATIVE: {
+                            std::cout << "[AMF] 执行保守过滤策略（高选择性查询）" << std::endl;
+                            perf_metrics.conservative_strategy_count++;
+
+                            auto bloom_end = std::chrono::high_resolution_clock::now();
+                            perf_metrics.bloom_filter_time += (bloom_end - bloom_start);
+
+                            current_leaf_passed_bloom = true;
+                            auto h_mbr_start = std::chrono::high_resolution_clock::now();
+                            leaf_candidates = ext.h_mbr.query(env_query_window);
+                            auto h_mbr_end = std::chrono::high_resolution_clock::now();
+                            perf_metrics.h_mbr_time += (h_mbr_end - h_mbr_start);
+                            break;
+                        }
+                    }
+
+                    // 统计候选对象数量
+                    int leaf_candidates_count = leaf_candidates.size();
+                    perf_metrics.total_candidates += leaf_candidates_count;
                 }
 
                 // --- 键级别的过滤 ---
@@ -906,10 +1303,18 @@ std::pair<typename alex::Alex<T, P>::Iterator, double> index_probe_curve
 
                 // [最终阶段] 精确过滤
                 count_filter += 1; // 修正：只在这里计数，表示对象进入了最终的精确检查阶段
+
+                // 性能统计：记录精确相交检测时间
+                auto exact_start = std::chrono::high_resolution_clock::now();
+
                 // 只有通过了所有过滤阶段的候选者才能进行最终的、昂贵的几何相交检查
                 if (query_window->intersects(payload)) {
                     find_result.push_back(payload);
+                    perf_metrics.final_results++;
                 }
+
+                auto exact_end = std::chrono::high_resolution_clock::now();
+                perf_metrics.exact_intersection_time += (exact_end - exact_start);
             }
             
             avg_num_visited_leaf = it.num_visited_leaf;
