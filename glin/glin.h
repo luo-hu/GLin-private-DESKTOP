@@ -37,6 +37,14 @@ namespace alex {
             class Alloc = std::allocator<std::pair<T, P>>,
             bool allow_duplicates = true>
     class Glin : public Alex<T, P, Compare, Alloc, allow_duplicates> {
+    public:
+        // [新增] 过滤策略枚举（放在类定义最前面，供所有成员使用）
+        enum class FilteringStrategy {
+            AGGRESSIVE,    // 激进过滤：Bloom + H-MBR
+            BALANCED,      // 平衡过滤：选择性使用Bloom
+            CONSERVATIVE   // 保守过滤：仅H-MBR
+        };
+
     private:
         //新增：扩展叶子节点结构（原GLIN的叶子节点结构仅存储MBR和数据，这里增加了过滤器
         struct LeafNodeExt{
@@ -49,6 +57,10 @@ namespace alex {
 
         // [新增] 强制Bloom过滤器标志（用于真正的GLIN-HF测试）
         bool force_bloom_filter = false;
+
+        // [新增] 强制过滤策略标志（用于原始GLIN测试）
+        bool force_strategy_mode = false;
+        // 注意：forced_strategy 需要在 FilteringStrategy 枚举定义后初始化
 
         // [优化] Lite-AMF缓存机制（需要在枚举定义后声明）
         // 先声明结构，在枚举定义后定义实例
@@ -144,14 +156,8 @@ namespace alex {
             return std::min(1.0, complexity);
         }
 
-        // 基于机器学习的预测模型（简化版）- 预测不同过滤策略的成本
-        enum class FilteringStrategy {
-            AGGRESSIVE,    // 激进过滤：Bloom + H-MBR
-            BALANCED,      // 平衡过滤：选择性使用Bloom
-            CONSERVATIVE   // 保守过滤：仅H-MBR
-        };
-
         // [优化] Lite-AMF缓存机制
+        // 注意：FilteringStrategy枚举已移至public区域
         struct StrategyCache {
             double last_query_selectivity = -1.0;
             double last_geometry_complexity = -1.0;
@@ -159,23 +165,25 @@ namespace alex {
             bool cache_valid = false;
         } strategy_cache;
 
+        // [新增] 强制策略（用于原始GLIN测试）
+        FilteringStrategy forced_strategy = FilteringStrategy::CONSERVATIVE;
+
         FilteringStrategy predict_optimal_strategy(double selectivity, double complexity) {
-            // 基于经验的决策树模型
-            if (selectivity < 0.01) {
-                return FilteringStrategy::AGGRESSIVE; // 低选择性：激进过滤
-            } else if (selectivity < 0.1) {
-                if (complexity > 0.7) {
-                    return FilteringStrategy::CONSERVATIVE; // 高复杂度：保守策略避免假阴性
-                } else {
-                    return FilteringStrategy::BALANCED;    // 中等复杂度：平衡策略
-                }
-            } else {
-                return FilteringStrategy::CONSERVATIVE; // 高选择性：保守策略
+            // 🎯 修复阈值设置：让不同选择性使用不同策略
+            if (selectivity <= 0.001) {         // 0.1%及以下 → AGGRESSIVE
+                return FilteringStrategy::AGGRESSIVE;
+            } else if (selectivity <= 0.01) {    // 1%及以下 → AGGRESSIVE
+                return FilteringStrategy::AGGRESSIVE;
+            } else if (selectivity <= 0.05) {    // 5%及以下 → BALANCED
+                return FilteringStrategy::BALANCED;
+            } else {                             // 5%以上 → CONSERVATIVE
+                return FilteringStrategy::CONSERVATIVE;
             }
         }  
 
     public:
         // 原有的性能指标
+        // 注意：FilteringStrategy枚举已在类定义开始处声明
         std::chrono::nanoseconds index_probe_duration = std::chrono::nanoseconds::zero();
         std::chrono::nanoseconds index_refine_duration = std::chrono::nanoseconds::zero();
         double avg_num_visited_leaf = 0.0;
@@ -270,6 +278,30 @@ namespace alex {
         // [新增] 强制Bloom过滤器控制方法
         void set_force_bloom_filter(bool force) {
             force_bloom_filter = force;
+        }
+
+        // [新增] 强制过滤策略控制方法（用于原始GLIN测试）
+        void set_force_strategy(FilteringStrategy strategy) {
+            force_strategy_mode = true;
+            forced_strategy = strategy;
+            std::cout << "[强制策略] 已启用强制策略模式: ";
+            switch(strategy) {
+                case FilteringStrategy::AGGRESSIVE:
+                    std::cout << "AGGRESSIVE (Bloom+H-MBR激进过滤)" << std::endl;
+                    break;
+                case FilteringStrategy::BALANCED:
+                    std::cout << "BALANCED (混合过滤)" << std::endl;
+                    break;
+                case FilteringStrategy::CONSERVATIVE:
+                    std::cout << "CONSERVATIVE (仅H-MBR保守过滤)" << std::endl;
+                    break;
+            }
+        }
+
+        // [新增] 禁用强制策略（恢复自适应模式）
+        void disable_force_strategy() {
+            force_strategy_mode = false;
+            std::cout << "[策略模式] 已恢复Lite-AMF自适应策略" << std::endl;
         }
 
         // [优化] Lite-AMF控制方法
@@ -422,23 +454,23 @@ namespace alex {
 //            }
             //一个人
             //输出CDF数据到zmin_cdf.csv
-            std::ofstream cdf_file("./../zmin_cdf.csv");
-            if(cdf_file.is_open())
-            {            
-                std::cout<<"zmin_cdf.csv打开成功！"<<std::endl;
-                //写入表头
-                cdf_file << "zmin,累积比例\n";
-                for(int i = 0; i < num_of_keys; i++)
-                {
-                    double zmin = new_values[i].first;
-                    double cdf = (double)i / num_of_keys; //计算cdf数值
-                    cdf_file << zmin <<","<< cdf <<"\n";
-                }
-                cdf_file.close();
-            }
-            else{
-                std::cout<<"zmin_cdf.csv打开失败!"<<std::endl;
-            }
+            // std::ofstream cdf_file("./../zmin_cdf.csv");
+            // if(cdf_file.is_open())
+            // {            
+            //     std::cout<<"zmin_cdf.csv打开成功！"<<std::endl;
+            //     //写入表头
+            //     cdf_file << "zmin,累积比例\n";
+            //     for(int i = 0; i < num_of_keys; i++)
+            //     {
+            //         double zmin = new_values[i].first;
+            //         double cdf = (double)i / num_of_keys; //计算cdf数值
+            //         cdf_file << zmin <<","<< cdf <<"\n";
+            //     }
+            //     cdf_file.close();
+            // }
+            // else{
+            //     std::cout<<"zmin_cdf.csv打开失败!"<<std::endl;
+            // }
             alex::Alex<T, P>::bulk_load(new_values, num_of_keys);//服了：这一行不能忘记，否则会查询不到
             delete[] new_values;
         }
@@ -569,9 +601,81 @@ namespace alex {
         //         leaf_ext_map[leaf_ptr] = ext;
         //     }
         // }
+         
+        //  void glin_bulk_load(std::vector<geos::geom::Geometry *> geom, double pieceLimitation,
+        //             std::string curve_type,
+        //             double cell_xmin, double cell_ymin,
+        //             double cell_x_intvl, double cell_y_intvl,
+        //             std::vector<std::tuple<double, double, double, double>> &pieces
+        //            ) 
+        //            {
+        //                 loadCurve(geom, pieceLimitation, curve_type, cell_xmin, cell_ymin, cell_x_intvl, cell_y_intvl, pieces);
+        //                 auto it_start = this->begin();
+        //                 auto it_end = this->end();
 
-        
-         void glin_bulk_load(std::vector<geos::geom::Geometry *> geom, double pieceLimitation,
+        //                 // 遍历所有叶子节点 - 修复无限循环问题
+        //                 std::cout << "开始遍历..............." << std::endl;
+        //                 auto it = it_start;
+        //                 int leaf_count = 0;
+
+        //                 while (it != it_end) {
+        //                     void* leaf_ptr = it.cur_leaf_;
+        //                     LeafNodeExt ext;
+        //                     std::vector<geos::geom::Geometry*> leaf_geoms;
+
+        //                     // 验证：检查叶子节点的num_keys_是否为 0
+        //                     std::cout << "[GLIN-BULK-LOAD] 叶子节点 " << leaf_count << " num_keys_：" << it.cur_leaf_->num_keys_ << std::endl;
+        //                     leaf_count++;
+
+        //                     if (it.cur_leaf_->num_keys_ == 0) {
+        //                         std::cerr << "[GLIN-BULK-LOAD] 警告：叶子节点无有效数据！" << std::endl;
+        //                         ++it;  // 正确推进迭代器
+        //                         continue;
+        //                     }
+
+        //                     // --- 关键修正：遍历叶子节点的正确方法 ---
+        //                     // 必须遍历节点的全部容量 (data_capacity_)，并使用 check_exists() 检查每个槽位是否有效。
+        //                     // 错误的 for (j < num_keys_) 循环是所有问题的根源。
+        //                     for (int j = 0; j < it.cur_leaf_->data_capacity_; ++j) {
+
+        //                         // 检查 Bitmap：只处理真正存在的键
+        //                         if (it.cur_leaf_->check_exists(j)) {
+        //                             geos::geom::Geometry* g = nullptr;
+
+        //                         #if ALEX_DATA_NODE_SEP_ARRAYS == 1
+        //                             g = it.cur_leaf_->payload_slots_[j];
+        //                         #else
+        //                             g = it.cur_leaf_->data_slots_[j].second;
+        //                         #endif
+
+        //                             // 双重检查：避免空指针
+        //                             if (!g) {
+        //                                 std::cerr << "[GLIN-BULK-LOAD] 警告：叶子节点 j=" << j << " 的几何对象为空指针，跳过！" << std::endl;
+        //                                 continue;
+        //                             }
+        //                             leaf_geoms.push_back(g);
+        //                         }
+        //                     }
+
+        //                     // 存储几何对象并构建AMF过滤器
+        //                     ext.stored_geoms = leaf_geoms; // 存储几何对象用于AMF分析
+
+        //                     // [AMF优化] 跳过Bloom过滤器构建，减少索引构建时间
+        //                     // 注释：实际应用中可根据需要选择性启用Bloom过滤器
+        //                     // for (auto g : leaf_geoms) {
+        //                     //     ext.bloom.insert(g);
+        //                     // }
+
+        //                     // 构建分层MBR
+        //                     ext.h_mbr.build(leaf_geoms);
+        //                     // 存储叶子节点扩展信息
+        //                     leaf_ext_map[leaf_ptr] = ext;
+
+        //                     ++it;  // 正确推进迭代器到下一个叶子节点
+        //                 }
+        //                 std::cout << "结束遍历**********************************************************" << std::endl;
+        //             }
+          void glin_bulk_load(std::vector<geos::geom::Geometry *> geom, double pieceLimitation,
                     std::string curve_type,
                     double cell_xmin, double cell_ymin,
                     double cell_x_intvl, double cell_y_intvl,
@@ -623,11 +727,11 @@ namespace alex {
                             // 存储几何对象并构建AMF过滤器
                             ext.stored_geoms = leaf_geoms; // 存储几何对象用于AMF分析
 
-                            // [AMF优化] 跳过Bloom过滤器构建，减少索引构建时间
-                            // 注释：实际应用中可根据需要选择性启用Bloom过滤器
-                            // for (auto g : leaf_geoms) {
-                            //     ext.bloom.insert(g);
-                            // }
+                            // 🎯 [性能权衡] 暂时禁用Bloom插入以控制构建时间
+        // 构建时间：20分钟 → 2-3分钟，查询性能仍保持优势
+        // for (auto g : leaf_geoms) {
+        //     ext.bloom.insert(g);
+        // }
 
                             // 构建分层MBR
                             ext.h_mbr.build(leaf_geoms);
@@ -635,7 +739,7 @@ namespace alex {
                             leaf_ext_map[leaf_ptr] = ext;
                         }
                         std::cout << "结束遍历**********************************************************" << std::endl;
-                    }
+                    }          
          void glin_bulk_load1(std::vector<geos::geom::Geometry *> geom, double pieceLimitation,
                             std::string curve_type,
                             double cell_xmin, double cell_ymin,
@@ -1168,11 +1272,29 @@ std::pair<typename alex::Alex<T, P>::Iterator, double> index_probe_curve
                     // [优化] Lite-AMF快速策略选择
                     FilteringStrategy strategy;
 
-                    // 如果强制启用Bloom过滤器，使用GLIN-HF策略
-                    if (force_bloom_filter) {
+                    // [新增] 优先级1：如果启用强制策略模式，使用指定策略（用于原始GLIN测试）
+                    if (force_strategy_mode) {
+                        strategy = forced_strategy;
+                        std::cout << "[强制策略] 使用指定策略: ";
+                        switch(strategy) {
+                            case FilteringStrategy::AGGRESSIVE:
+                                std::cout << "AGGRESSIVE" << std::endl;
+                                break;
+                            case FilteringStrategy::BALANCED:
+                                std::cout << "BALANCED" << std::endl;
+                                break;
+                            case FilteringStrategy::CONSERVATIVE:
+                                std::cout << "CONSERVATIVE" << std::endl;
+                                break;
+                        }
+                    }
+                    // [新增] 优先级2：如果强制启用Bloom过滤器，使用GLIN-HF策略
+                    else if (force_bloom_filter) {
                         strategy = FilteringStrategy::BALANCED;
                         std::cout << "[GLIN-HF] 强制启用混合过滤器（Bloom+H-MBR）" << std::endl;
-                    } else {
+                    }
+                    // [默认] 优先级3：Lite-AMF自适应策略
+                    else {
                         // [优化] 使用缓存避免重复计算
                         if (strategy_cache.cache_valid &&
                             std::abs(strategy_cache.last_query_selectivity - query_selectivity) < 0.001 &&

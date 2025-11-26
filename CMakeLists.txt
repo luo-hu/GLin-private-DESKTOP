@@ -200,17 +200,151 @@ find_package(Boost REQUIRED COMPONENTS system)
 include_directories(${GEOS_INCLUDE_DIR} ${Boost_INCLUDE_DIRS})
 
 # -------------------------- 测试目标 --------------------------
-add_executable(test_glin_hf 
-    test/test_glin_hf.cpp 
+add_executable(test_glin_hf
+    test/test_glin_hf.cpp
     glin/hilbert/hilbert.cpp
 )
 
-target_link_libraries(test_glin_hf PRIVATE 
+# target_compile_definitions(test_glin_hf PRIVATE PIECE)
+# target_compile_definitions(test_glin_hf PRIVATE)
+target_link_libraries(test_glin_hf PRIVATE
     ${GEOS_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
 )
 
-target_include_directories(test_glin_hf PUBLIC 
+target_include_directories(test_glin_hf PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+    "${GEOS_INCLUDE_DIR}"
+    "${Boost_INCLUDE_DIRS}"
+)
+
+# 优化版本的GLIN-HF测试
+add_executable(test_glin_hf_optimized
+    test/test_glin_hf_optimized.cpp
+    glin/hilbert/hilbert.cpp
+)
+
+target_compile_definitions(test_glin_hf_optimized PRIVATE PIECE)
+target_link_libraries(test_glin_hf_optimized PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+
+target_include_directories(test_glin_hf_optimized PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+    "${GEOS_INCLUDE_DIR}"
+    "${Boost_INCLUDE_DIRS}"
+)
+
+# 基础功能测试
+add_executable(test_basic_functionality
+    test/test_basic_functionality.cpp
+    glin/hilbert/hilbert.cpp
+)
+
+target_compile_definitions(test_basic_functionality PRIVATE PIECE)
+target_link_libraries(test_basic_functionality PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+
+target_include_directories(test_basic_functionality PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+    "${GEOS_INCLUDE_DIR}"
+    "${Boost_INCLUDE_DIRS}"
+)
+
+# 最小化内存测试
+add_executable(test_minimal_memory
+    test/test_minimal_memory.cpp
+    glin/hilbert/hilbert.cpp
+)
+
+target_compile_definitions(test_minimal_memory PRIVATE PIECE)
+target_link_libraries(test_minimal_memory PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+
+target_include_directories(test_minimal_memory PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+    "${GEOS_INCLUDE_DIR}"
+    "${Boost_INCLUDE_DIRS}"
+)
+
+# 内存调试测试
+add_executable(test_memory_debug
+    test/test_memory_debug.cpp
+    glin/hilbert/hilbert.cpp
+)
+
+target_compile_definitions(test_memory_debug PRIVATE PIECE)
+target_link_libraries(test_memory_debug PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+
+target_include_directories(test_memory_debug PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+    "${GEOS_INCLUDE_DIR}"
+    "${Boost_INCLUDE_DIRS}"
+)
+
+# 优化大数据集测试
+add_executable(test_optimized_large
+    test/test_optimized_large.cpp
+    glin/hilbert/hilbert.cpp
+)
+
+target_compile_definitions(test_optimized_large PRIVATE PIECE)
+target_link_libraries(test_optimized_large PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+
+target_include_directories(test_optimized_large PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+    "${GEOS_INCLUDE_DIR}"
+    "${Boost_INCLUDE_DIRS}"
+)
+
+# 完整性能测试 (包含索引构建时间)
+add_executable(test_complete_performance
+    test/test_complete_performance.cpp
+    glin/hilbert/hilbert.cpp
+)
+
+# 注意：这个测试需要同时测试启用和禁用PIECE的版本
+# 原始GLIN: 需要PIECE
+# GLIN-HF: 需要PIECE
+# Lite-AMF: 不需要PIECE (但为了方便，我们也可以启用，piecelimitation设为极大值)
+target_compile_definitions(test_complete_performance PRIVATE PIECE)
+target_link_libraries(test_complete_performance PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+
+target_include_directories(test_complete_performance PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+    "${GEOS_INCLUDE_DIR}"
+    "${Boost_INCLUDE_DIRS}"
+)
+
+# GLIN论文标准实验框架
+add_executable(test_glin_paper_standard
+    test/test_glin_paper_standard.cpp
+    glin/hilbert/hilbert.cpp
+)
+
+# 注意：不预先定义PIECE，因为测试会在不同方法中动态控制分段
+# GLIN-HF会在代码中启用分段 (piecelimitation = 100.0)
+# Lite-AMF会在代码中禁用分段 (piecelimitation = 1000000.0)
+target_link_libraries(test_glin_paper_standard PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+
+target_include_directories(test_glin_paper_standard PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
     "${GEOS_INCLUDE_DIR}"
     "${Boost_INCLUDE_DIRS}"

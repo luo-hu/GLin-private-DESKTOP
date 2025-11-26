@@ -239,47 +239,127 @@ int main() {
     geos::geom::GeometryFactory::Ptr factory = geos::geom::GeometryFactory::create();
     geos::io::WKTReader reader(factory.get());
     std::vector<geos::geom::Geometry*> geoms;
-    for (int i = 0; i < 150000; ++i) {
-        // 生成随机多边形（示例WKT）,避免重叠，步长为10
-        double x1 = i*5;
-        double y1 = i*5;
-        double x2 = x1 + 3;
-        double y2 = y1 + 3;//矩形的宽和高为5
-        //合法WKT：闭合矩形，首尾坐标相同
-        std::string wkt = "POLYGON((" + std::to_string(x1) + " " + std::to_string(y1) + "," + 
-                                        std::to_string(x1) + " " + std::to_string(y2) + "," +
-                                        std::to_string(x2) + " " + std::to_string(y2) + "," +
-                                        std::to_string(x2) + " " + std::to_string(y1) + "," +
-                                        std::to_string(x1) + " " + std::to_string(y1) + "))";
-        //geoms.push_back(reader.read(wkt).get());//解析合法WKT，get获取的原始指针，不能用智能指针
-        // 修复后（release()转移所有权，unique_ptr不再管理对象，避免提前释放）
-        std::unique_ptr<geos::geom::Geometry> geom_ptr = reader.read(wkt);
-        // 新增：检查几何对象是否生成成功
-        if (!geom_ptr) {
-            std::cerr << "错误：生成几何对象失败！WKT=" << wkt << std::endl;
-            return -1;  // 直接退出，避免后续错误
-        }
-        geoms.push_back(geom_ptr.release());  // 转移所有权到geoms，后续手动释放
-         std::cout << "生成第" << i << "个几何对象：" << wkt << std::endl;  // 新增日志：确认WKT正确
+    // for (int i = 0; i < 150000; ++i) {
+    //     // 生成随机多边形（示例WKT）,避免重叠，步长为10
+    //     double x1 = i*5;
+    //     double y1 = i*5;
+    //     double x2 = x1 + 3;
+    //     double y2 = y1 + 3;//矩形的宽和高为5
+    //     //合法WKT：闭合矩形，首尾坐标相同
+    //     std::string wkt = "POLYGON((" + std::to_string(x1) + " " + std::to_string(y1) + "," + 
+    //                                     std::to_string(x1) + " " + std::to_string(y2) + "," +
+    //                                     std::to_string(x2) + " " + std::to_string(y2) + "," +
+    //                                     std::to_string(x2) + " " + std::to_string(y1) + "," +
+    //                                     std::to_string(x1) + " " + std::to_string(y1) + "))";
+    //     //geoms.push_back(reader.read(wkt).get());//解析合法WKT，get获取的原始指针，不能用智能指针
+    //     // 修复后（release()转移所有权，unique_ptr不再管理对象，避免提前释放）
+    //     std::unique_ptr<geos::geom::Geometry> geom_ptr = reader.read(wkt);
+    //     // 新增：检查几何对象是否生成成功
+    //     if (!geom_ptr) {
+    //         std::cerr << "错误：生成几何对象失败！WKT=" << wkt << std::endl;
+    //         return -1;  // 直接退出，避免后续错误
+    //     }
+    //     geoms.push_back(geom_ptr.release());  // 转移所有权到geoms，后续手动释放
+    //      std::cout << "生成第" << i << "个几何对象：" << wkt << std::endl;  // 新增日志：确认WKT正确
+    // }
+    // std::cout << "测试数据生成完成，共" << geoms.size() << "个对象" << std::endl;  // 日志：确认数据生成成功
+ 
+    std::vector<std::string> wkt_polygons;
+    //CSV读取数据
+    std::ifstream inputFile("/mnt/hgfs/sharedFolder/AREAWATER.csv");
+    if(!inputFile.is_open())
+    {
+        std::cerr<<"AREAWATER.csv文件打开失败"<<std::endl;
     }
- std::cout << "测试数据生成完成，共" << geoms.size() << "个对象" << std::endl;  // 日志：确认数据生成成功
+    std::string line,wkt_string;
+    int line_count = 0;
+    //while循环不断逐行读取，直到结束
+    std::cout<<"开始读取数据集..."<<std::endl;
+    while(getline(inputFile,line))
+    {
+        line_count ++;
+        if(line_count == 100000) break;
+        //Alex库一次最多只能读取15000条数据，再多就会报错
+        if(line_count % 20000 == 0)
+        {
+            std::cout<<"已处理"<<line_count<<"行"<<std::endl;
+        }
+        //首先要移除可能存在的 UTF-8 BOM符号
+        if(line.length() >= 3 && line[0] == '\xEF' && line[1] == '\xBB' && line[2] == '\xBF')
+        {
+            line = line.substr(3);//从第四个开始截取直到最后一个
+        }
+        
+        //先初步去除 空格，制表符，换行符，回车符
+        line.erase(std::remove(line.begin(),line.end(),'\r'),line.end()); //删除字符串里所有的回车符
+        line.erase(0,line.find_first_not_of(" \t\n\r"));               //删除开头的空格/制表/换行/回车
+        line.erase(line.find_last_not_of(" \t\n\r") + 1);              //删除末尾的...
+        
+        if(line.empty()) continue;
+        
+        //根据引号来分离出WKT字符串
+        if(line.front() == '"')//如果WKT字符串被双引号包裹
+        {
+            size_t end_quote_pos = line.find('"',1);//从下标1开始找第二个引号
+            if(end_quote_pos != std::string::npos)
+            {
+                //截取两个引号之间的内容
+                wkt_string = line.substr(1,end_quote_pos - 1);
+            }
+            else continue;
+        }
+        else{
+            //第二种情况：没有被引号包裹，则从0开始一直截取到最后一个‘）’的位置
+            size_t last_paren_pos = line.rfind(')');
+            if(last_paren_pos != std::string::npos)
+            {
+                wkt_string = line.substr(0,last_paren_pos + 1);
+                // 清理可能存在的尾部空白
+                wkt_string.erase(wkt_string.find_last_not_of(" \t\n\r") + 1);
+            }
+            else{
+                continue;
+            }
+        }  
+        if(wkt_string.empty())
+        {
+            continue;
+        }
+        else{
+             wkt_polygons.push_back(wkt_string);
+        }
+
+        
+    }
+
+    for (const auto& wkt : wkt_polygons) {
+        try {
+            geoms.push_back(reader.read(wkt).release());//read 返回的智能指针std::unique_ptr<geos::geom::Geometry>,geoms只能接受原始指针
+        } catch (const geos::util::GEOSException& e) {
+            std::cerr << "解析WKT失败: " << e.what() << std::endl;
+        }
+    }
+    std::cout<<"geoms.size():"<<geoms.size()<<std::endl;
+
 
     // 2. 初始化GLIN和GLIN-HF
     alex::Glin<double, geos::geom::Geometry*> glin_original;
     alex::Glin<double, geos::geom::Geometry*> glin_hf;  // 带过滤器的版本
 
     // 3. 加载数据
-    double piecelimitation = 100.0; 
+    double piecelimitation = 2000.0; 
     std::string curve_type = "z";//Z曲线填充
-    // 修改cell_xmin和cell_ymin为负值，确保能包含所有几何对象
-    // double cell_xmin = -1;
-    // double cell_ymin = -1;
-    // double cell_x_intvl = 0.1;  // 减小间隔以提高精度
-    // double cell_y_intvl = 0.1;
-        double cell_xmin = 0.0;    // 网格起点应与数据最小坐标对齐
-    double cell_ymin = 0.0;
-    double cell_x_intvl = 1.0; // 使用合适的单元格大小
-    double cell_y_intvl = 1.0;
+    double cell_xmin = -100;
+    double cell_ymin = -90;
+    double cell_x_intvl = 0.01;
+    double cell_y_intvl = 0.01;
+
+    // double piecelimitation = 100.0; 
+    // std::string curve_type = "z";//Z曲线填充
+    // double cell_xmin = 0.0;    // 网格起点应与数据最小坐标对齐
+    // double cell_ymin = 0.0;
+    // double cell_x_intvl = 1.0; // 使用合适的单元格大小
+    // double cell_y_intvl = 1.0;
     std::cout << "开始加载数据到GLIN..." << std::endl;  // 日志：标记加载开始
     std::vector<std::tuple<double, double, double, double>> pieces;
     auto start_load = std::chrono::high_resolution_clock::now();
@@ -302,7 +382,7 @@ int main() {
 
     // 测试两个不同的查询窗口
     std::vector<std::string> test_queries = {
-        "POLYGON((4 4,4 7,6 7,6 4,4 4))",  // 查询框左下角小于被查对象左下角
+        //"POLYGON((4 4,4 7,6 7,6 4,4 4))",  // 查询框左下角小于被查对象左下角
         //"POLYGON((6 6,6 7,9 7,9 6,6 6))",  // 查询框左下角大于被查对象左下角
        //"POLYGON((9 11,9 14,12 14,12 11,9 11))",//相交
         // "POLYGON((11 9,11 11,12 11,12 9,11 9))",//相交
@@ -315,8 +395,8 @@ int main() {
         // "POLYGON((5 5,5 8,8 8,8 5,5 5))", // 应该与几何对象 (5,5,8,8) 重合
         //"POLYGON((5 5,5 8,7 8,7 5,5 5))", // 应该与几何对象 (5,5,8,8) 部分重合
         // "POLYGON((4 4,4 9,9 9,9 4,4 4))", //完全包含几何对象(5,5,8,8) 
-        "POLYGON((4 4,4 15,15 15,15 4,4 4))" //完全包含几何对象(5,5,8,8) (10,10,13,13) (15,15,18,18) 
-
+        //"POLYGON((4 4,4 15,15 15,15 4,4 4))" //完全包含几何对象(5,5,8,8) (10,10,13,13) (15,15,18,18) 
+        "POLYGON ((-86.91504 32.642045,-86.914891 32.641992,-86.914807 32.641953,-86.914762 32.641843,-86.914911 32.641866,-86.914952 32.641887,-86.915086 32.641956,-86.91504 32.642045))" //被矩形2包含
     };
 
     for (size_t query_idx = 0; query_idx < test_queries.size(); ++query_idx) {
