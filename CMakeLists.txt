@@ -148,46 +148,54 @@
 # enable_testing()
 # add_test(test_glin test_glin_piece dataGen)
 
-
 cmake_minimum_required(VERSION 3.12)
 project(glin)
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
-# -------------------------- Boost 配置 --------------------------
-set(Boost_NO_SYSTEM_PATHS ON)
-set(BOOST_INCLUDE_DIR "/usr/local/include" CACHE PATH "Boost 头文件目录")
-set(BOOST_LIBRARY_DIR "/usr/local/lib" CACHE PATH "Boost 库文件目录")
+# ========================== 核心修复：启用所有依赖的CPU指令集 ==========================
+# 新增：LZCNT(BMI1/BMI2) + 原有POPCNT/SSE4.2，覆盖所有内联函数依赖
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2")
+# C++14标准（项目要求）
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# 强制Debug模式（方便调试，如需Release可改为Release）
+set(CMAKE_BUILD_TYPE Debug)
+# Debug模式编译选项：生成调试符号+关闭优化+完整警告（删除所有禁用指令集的选项）
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall -Wextra")
+# Release模式编译选项（备用，同样包含所有指令集）
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -Wextra -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2")
+
+# ========================== Boost 配置（指定1.67.0，禁用系统路径） ==========================
+set(Boost_NO_SYSTEM_PATHS ON)          # 仅使用手动指定的Boost路径
+set(BOOST_INCLUDE_DIR "/usr/local/include" CACHE PATH "Boost头文件目录")
+set(BOOST_LIBRARY_DIR "/usr/local/lib" CACHE PATH "Boost库文件目录")
 set(Boost_INCLUDE_DIRS ${BOOST_INCLUDE_DIR})
 set(Boost_LIBRARY_DIRS ${BOOST_LIBRARY_DIR})
-set(Boost_VERSION 1.67.0)
-set(Boost_USE_STATIC_LIBS OFF)
-set(Boost_USE_MULTITHREADED ON)
+set(Boost_VERSION 1.67.0)              # 显式指定Boost版本
+set(Boost_USE_STATIC_LIBS OFF)         # 使用动态库
+set(Boost_USE_MULTITHREADED ON)        # 启用多线程支持
+find_package(Boost REQUIRED COMPONENTS system)
 
-# -------------------------- GEOS 配置（修正笔误） --------------------------
-set(GEOS_INCLUDE_DIR "/usr/local/geos/include" CACHE PATH "GEOS 头文件目录")
-set(GEOS_LIBRARY_DIR "/usr/local/geos/lib" CACHE PATH "GEOS 库文件目录")
-# 修正：明确指定 GEOS 库文件路径（避免之前的变量赋值错误）
-set(GEOS_LIBRARY ${GEOS_LIBRARY_DIR}/libgeos.so)
+# 打印Boost配置（调试用）
+message(STATUS "=== Boost 配置验证 ===")
+message(STATUS "Boost头文件路径: ${Boost_INCLUDE_DIRS}")
+message(STATUS "Boost库文件路径: ${Boost_LIBRARY_DIRS}")
+message(STATUS "Boost System库: ${Boost_SYSTEM_LIBRARY}")
+message(STATUS "========================")
+
+# ========================== GEOS 配置（修正变量笔误） ==========================
+set(GEOS_INCLUDE_DIR "/usr/local/geos/include" CACHE PATH "GEOS头文件目录")
+set(GEOS_LIBRARY_DIR "/usr/local/geos/lib" CACHE PATH "GEOS库文件目录")
+set(GEOS_LIBRARY ${GEOS_LIBRARY_DIR}/libgeos.so)  # 明确指定GEOS库文件
 find_package(GEOS REQUIRED COMPONENTS geos_cxx)
 
-# -------------------------- 编译选项（关键修正：添加 SSE4.2 支持） --------------------------
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_BUILD_TYPE Debug)  # 强制Debug模式
-# Debug模式：-g生成调试符号 + -O0关闭优化 + -msse4.2启用指令集 + 警告选项
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -msse4.2 -Wall -Wextra")
-# Release模式：保留原有优化
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -msse4.2 -Wall -Wextra")
+# 打印GEOS配置（调试用）
+message(STATUS "=== GEOS 配置验证 ===")
+message(STATUS "GEOS头文件路径: ${GEOS_INCLUDE_DIR}")
+message(STATUS "GEOS库文件路径: ${GEOS_LIBRARY}")
+message(STATUS "======================")
 
-# 仅在Release模式启用额外优化（避免影响Debug）
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    if(MSVC)
-        set(CMAKE_CXX_FLAGS "/O2 /arch:AVX2 /W1 /EHsc")
-    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
-        set(CMAKE_CXX_FLAGS "-O3 -xHost -msse4.2")
-    endif()
-endif()
-
-# -------------------------- 目标定义 --------------------------
+# ========================== GEOS目标封装（兼容链接） ==========================
 if(GEOS_FOUND AND NOT TARGET GEOS::geos_cxx)
     add_library(GEOS::geos_cxx UNKNOWN IMPORTED)
     set_target_properties(GEOS::geos_cxx PROPERTIES
@@ -196,169 +204,241 @@ if(GEOS_FOUND AND NOT TARGET GEOS::geos_cxx)
     )
 endif()
 
-find_package(Boost REQUIRED COMPONENTS system)
-include_directories(${GEOS_INCLUDE_DIR} ${Boost_INCLUDE_DIRS})
+# ========================== 全局头文件包含 ==========================
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+    ${GEOS_INCLUDE_DIR}
+    ${Boost_INCLUDE_DIRS}
+)
 
-# -------------------------- 测试目标 --------------------------
+# ========================== 目标1: test_glin_hf（核心测试目标） ==========================
 add_executable(test_glin_hf
     test/test_glin_hf.cpp
     glin/hilbert/hilbert.cpp
 )
-
-# target_compile_definitions(test_glin_hf PRIVATE PIECE)
-# target_compile_definitions(test_glin_hf PRIVATE)
+# 目标级兜底：确保所有指令集生效
+target_compile_options(test_glin_hf PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
 target_link_libraries(test_glin_hf PRIVATE
     ${GEOS_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
 )
-
 target_include_directories(test_glin_hf PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
-    "${GEOS_INCLUDE_DIR}"
-    "${Boost_INCLUDE_DIRS}"
 )
 
-# 优化版本的GLIN-HF测试
+# ========================== 目标2: test_glin_hf_optimized（优化版本测试） ==========================
 add_executable(test_glin_hf_optimized
     test/test_glin_hf_optimized.cpp
     glin/hilbert/hilbert.cpp
 )
-
+target_compile_options(test_glin_hf_optimized PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
 target_compile_definitions(test_glin_hf_optimized PRIVATE PIECE)
 target_link_libraries(test_glin_hf_optimized PRIVATE
     ${GEOS_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
 )
-
 target_include_directories(test_glin_hf_optimized PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
-    "${GEOS_INCLUDE_DIR}"
-    "${Boost_INCLUDE_DIRS}"
 )
 
-# 基础功能测试
+# ========================== 目标3: test_basic_functionality（基础功能测试） ==========================
 add_executable(test_basic_functionality
     test/test_basic_functionality.cpp
     glin/hilbert/hilbert.cpp
 )
-
+target_compile_options(test_basic_functionality PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
 target_compile_definitions(test_basic_functionality PRIVATE PIECE)
 target_link_libraries(test_basic_functionality PRIVATE
     ${GEOS_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
 )
-
 target_include_directories(test_basic_functionality PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
-    "${GEOS_INCLUDE_DIR}"
-    "${Boost_INCLUDE_DIRS}"
 )
 
-# 最小化内存测试
+# ========================== 目标4: test_minimal_memory（最小化内存测试） ==========================
 add_executable(test_minimal_memory
     test/test_minimal_memory.cpp
     glin/hilbert/hilbert.cpp
 )
-
+target_compile_options(test_minimal_memory PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
 target_compile_definitions(test_minimal_memory PRIVATE PIECE)
 target_link_libraries(test_minimal_memory PRIVATE
     ${GEOS_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
 )
-
 target_include_directories(test_minimal_memory PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
-    "${GEOS_INCLUDE_DIR}"
-    "${Boost_INCLUDE_DIRS}"
 )
 
-# 内存调试测试
+# ========================== 目标5: test_memory_debug（内存调试测试） ==========================
 add_executable(test_memory_debug
     test/test_memory_debug.cpp
     glin/hilbert/hilbert.cpp
 )
-
+target_compile_options(test_memory_debug PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
 target_compile_definitions(test_memory_debug PRIVATE PIECE)
 target_link_libraries(test_memory_debug PRIVATE
     ${GEOS_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
 )
-
 target_include_directories(test_memory_debug PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
-    "${GEOS_INCLUDE_DIR}"
-    "${Boost_INCLUDE_DIRS}"
 )
 
-# 优化大数据集测试
+# ========================== 目标6: test_optimized_large（大数据集优化测试） ==========================
 add_executable(test_optimized_large
     test/test_optimized_large.cpp
     glin/hilbert/hilbert.cpp
 )
-
+target_compile_options(test_optimized_large PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
 target_compile_definitions(test_optimized_large PRIVATE PIECE)
 target_link_libraries(test_optimized_large PRIVATE
     ${GEOS_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
 )
-
 target_include_directories(test_optimized_large PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
-    "${GEOS_INCLUDE_DIR}"
-    "${Boost_INCLUDE_DIRS}"
 )
 
-# 完整性能测试 (包含索引构建时间)
+# ========================== 目标7: test_complete_performance（完整性能测试） ==========================
 add_executable(test_complete_performance
     test/test_complete_performance.cpp
     glin/hilbert/hilbert.cpp
 )
-
-# 注意：这个测试需要同时测试启用和禁用PIECE的版本
-# 原始GLIN: 需要PIECE
-# GLIN-HF: 需要PIECE
-# Lite-AMF: 不需要PIECE (但为了方便，我们也可以启用，piecelimitation设为极大值)
+target_compile_options(test_complete_performance PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
 target_compile_definitions(test_complete_performance PRIVATE PIECE)
 target_link_libraries(test_complete_performance PRIVATE
     ${GEOS_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
 )
-
 target_include_directories(test_complete_performance PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
-    "${GEOS_INCLUDE_DIR}"
-    "${Boost_INCLUDE_DIRS}"
 )
 
-# GLIN论文标准实验框架
+# ========================== 目标8: test_glin_paper_standard（论文标准实验） ==========================
 add_executable(test_glin_paper_standard
     test/test_glin_paper_standard.cpp
     glin/hilbert/hilbert.cpp
 )
-
-# 注意：不预先定义PIECE，因为测试会在不同方法中动态控制分段
-# GLIN-HF会在代码中启用分段 (piecelimitation = 100.0)
-# Lite-AMF会在代码中禁用分段 (piecelimitation = 1000000.0)
+target_compile_options(test_glin_paper_standard PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
 target_link_libraries(test_glin_paper_standard PRIVATE
     ${GEOS_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
 )
-
 target_include_directories(test_glin_paper_standard PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
-    "${GEOS_INCLUDE_DIR}"
-    "${Boost_INCLUDE_DIRS}"
 )
 
-add_executable(my_glin_test indexBuildAndFindByMe.cpp ./glin/hilbert/hilbert.h ./glin/hilbert/hilbert.cpp)
-# 合并重复的 target_link_libraries，避免冗余
-target_link_libraries(my_glin_test PRIVATE 
-    ${GEOS_LIBRARY}  # 直接使用 GEOS_LIBRARY（已验证路径正确）
-    ${Boost_SYSTEM_LIBRARY}  # 直接使用 Boost 动态库
+# ========================== 目标9: test_glin_insert_delete（插入删除性能测试） ==========================
+add_executable(test_glin_insert_delete
+    test/test_glin_insert_delete.cpp
+    glin/hilbert/hilbert.cpp
 )
-target_include_directories(my_glin_test PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core;${Boost_INCLUDE_DIRS}>")
+# 重点：这个目标报错，额外兜底添加指令集
+target_compile_options(test_glin_insert_delete PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
+target_link_libraries(test_glin_insert_delete PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+target_include_directories(test_glin_insert_delete PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+)
 
+# ========================== 目标9b: test_glin_insert_delete_fixed（修复版本插入删除测试） ==========================
+add_executable(test_glin_insert_delete_fixed
+    test/test_glin_insert_delete_fixed.cpp
+    glin/hilbert/hilbert.cpp
+)
+# 重点：新版本测试，确保所有指令集生效
+target_compile_options(test_glin_insert_delete_fixed PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
+target_link_libraries(test_glin_insert_delete_fixed PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+target_include_directories(test_glin_insert_delete_fixed PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+)
 
-# -------------------------- 测试配置 --------------------------
+# ========================== 目标10: my_glin_test（自定义索引测试） ==========================
+add_executable(my_glin_test
+    indexBuildAndFindByMe.cpp
+    glin/hilbert/hilbert.cpp
+)
+target_compile_options(my_glin_test PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
+target_link_libraries(my_glin_test PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+target_include_directories(my_glin_test PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+)
+
+# ========================== 目标11: test_simple_insert（简化插入测试） ==========================
+add_executable(test_simple_insert
+    test/test_simple_insert.cpp
+    glin/hilbert/hilbert.cpp
+)
+target_compile_options(test_simple_insert PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
+target_link_libraries(test_simple_insert PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+target_include_directories(test_simple_insert PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+)
+
+# ========================== 目标12: test_simple_delete（简化删除测试） ==========================
+add_executable(test_simple_delete
+    test/test_simple_delete.cpp
+    glin/hilbert/hilbert.cpp
+)
+target_compile_options(test_simple_delete PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
+target_link_libraries(test_simple_delete PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+target_include_directories(test_simple_delete PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+)
+
+# ========================== 目标13: test_scalable_areawater（可扩展大规模AREAWATER测试） ==========================
+add_executable(test_scalable_areawater
+    test/test_scalable_areawater.cpp
+    glin/hilbert/hilbert.cpp
+)
+target_compile_options(test_scalable_areawater PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
+target_link_libraries(test_scalable_areawater PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+target_include_directories(test_scalable_areawater PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/glin
+    ${GEOS_INCLUDE_DIR}
+    ${Boost_INCLUDE_DIR}
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+)
+
+# ========================== 目标13: test_high_performance_insert（高性能插入测试） ==========================
+add_executable(test_high_performance_insert
+    test/test_high_performance_insert.cpp
+    glin/hilbert/hilbert.cpp
+)
+target_compile_options(test_high_performance_insert PRIVATE -mpopcnt -msse4.2 -mlzcnt -mbmi -mbmi2)
+target_link_libraries(test_high_performance_insert PRIVATE
+    ${GEOS_LIBRARY}
+    ${Boost_SYSTEM_LIBRARY}
+)
+target_include_directories(test_high_performance_insert PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/core>"
+)
+
+# ========================== 测试配置（修正原错误格式） ==========================
 enable_testing()
-add_test(test_glin test_glin_piece dataGen)
+# 注：原test_glin_piece/dataGen未定义，先添加可执行的test_glin_hf测试
+add_test(NAME test_glin_hf COMMAND test_glin_hf)
+# 如需添加其他测试，参考格式：
+# add_test(NAME test_glin_insert_delete COMMAND test_glin_insert_delete)
+# add_test(NAME test_glin_paper_standard COMMAND test_glin_paper_standard)
